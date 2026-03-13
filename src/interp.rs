@@ -147,6 +147,19 @@ impl Eval for tree::typed::Expression {
                     alternative.eval(env)
                 }
             }
+            tree::typed::Expression::IfLetThenElse(nullable, refined, consequence, alternative) => {
+                let evaled_nullable = nullable.eval(env);
+
+                if let Value::Null = evaled_nullable {
+                    return alternative.eval(env);
+                }
+
+                if let Some(bind) = refined {
+                    env.variables.insert(bind, evaled_nullable);
+                }
+
+                consequence.eval(env)
+            }
             tree::typed::Expression::Seq(a, b) => {
                 a.eval(env);
                 b.eval(env)

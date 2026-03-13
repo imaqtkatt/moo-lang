@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, ptr::null};
 
 use crate::{
     shared::Selector,
@@ -101,19 +101,19 @@ pub struct ClassType(u32);
 pub trait Analyze {
     type Output;
 
-    fn analyze(self, context: &mut Context) -> Result<Self::Output, AnalysisError>;
+    fn analyze(self, ctx: &mut Context) -> Result<Self::Output, AnalysisError>;
 }
 
 pub trait Declare {
     type Output;
 
-    fn declare(&self, context: Context) -> Result<(Self::Output, Context), AnalysisError>;
+    fn declare(&self, ctx: Context) -> Result<(Self::Output, Context), AnalysisError>;
 }
 
 pub trait Define {
     type Output;
 
-    fn define(self, context: &mut Context) -> Result<Self::Output, AnalysisError>;
+    fn define(self, ctx: &mut Context) -> Result<Self::Output, AnalysisError>;
 }
 
 fn type_equality(a: &Type, b: &Type) -> Result<(), AnalysisError> {
@@ -140,6 +140,18 @@ impl Context {
         let current = self.next_class;
         self.next_class += 1;
         ClassType(current)
+    }
+
+    fn scope<T>(
+        &mut self,
+        name: &str,
+        value: (Bind, Type),
+        scope: impl FnOnce(&mut Context) -> T,
+    ) -> T {
+        self.bind(name, value);
+        let result = scope(self);
+        _ = self.locals.remove(name);
+        result
     }
 
     fn lookup_local(&self, name: &str) -> Result<(Bind, Type), AnalysisError> {
@@ -186,10 +198,10 @@ impl Context {
 impl Analyze for tree::ast::Expression {
     type Output = tree::typed::Typed<tree::typed::Expression>;
 
-    fn analyze(self, context: &mut Context) -> Result<Self::Output, AnalysisError> {
+    fn analyze(self, ctx: &mut Context) -> Result<Self::Output, AnalysisError> {
         match self {
             tree::ast::Expression::Variable(name) => {
-                let (bind, t) = context.lookup_local(&name)?;
+                let (bind, t) = ctx.lookup_local(&name)?;
 
                 let elaborated = match bind {
                     Bind::Field => tree::typed::Expression::Load(name),
@@ -225,15 +237,15 @@ impl Analyze for tree::ast::Expression {
 
                 Ok(Self::Output {
                     value: Box::new(e_self),
-                    r#type: context.locals["self"].1.clone(),
+                    r#type: ctx.locals["self"].1.clone(),
                 })
             }
             tree::ast::Expression::LetIn(bind, value, next) => {
-                let value = value.analyze(context)?;
+                let value = value.analyze(ctx)?;
 
-                _ = context.bind(&bind, (Bind::Local, value.r#type.clone()));
-
-                let next = next.analyze(context)?;
+                let next = ctx.scope(&bind, (Bind::Local, value.r#type.clone()), |ctx| {
+                    next.analyze(ctx)
+                })?;
                 let next_t = next.r#type.clone();
 
                 let let_in = tree::typed::Expression::LetIn(bind, value, next);
@@ -244,11 +256,11 @@ impl Analyze for tree::ast::Expression {
                 })
             }
             tree::ast::Expression::IfThenElse(condition, consequence, alternative) => {
-                let condition = condition.analyze(context)?;
+                let condition = condition.analyze(ctx)?;
                 type_equality(&condition.r#type, &Type::Bool)?;
 
-                let consequence = consequence.analyze(context)?;
-                let alternative = alternative.analyze(context)?;
+                let consequence = consequence.analyze(ctx)?;
+                let alternative = alternative.analyze(ctx)?;
 
                 type_equality(&consequence.r#type, &alternative.r#type)?;
 
@@ -261,11 +273,78 @@ impl Analyze for tree::ast::Expression {
                     r#type: branch_type,
                 })
             }
+            tree::ast::Expression::IfLetThenElse(nullable, refined, consequence, alternative) => {
+                if let tree::ast::Expression::Variable(name) = *nullable {
+                    let (bind, t) = ctx.lookup_local(&name)?;
+                    let inner = expect_nullable(&t)?;
+
+                    if refined.is_some() {
+                        todo!("alias on variable")
+                    }
+
+                    let consequence =
+                        ctx.scope(&name, (bind, inner), |ctx| consequence.analyze(ctx))?;
+
+                    let alternative = alternative.analyze(ctx)?;
+
+                    type_equality(&consequence.r#type, &alternative.r#type)?;
+                    let branch_type = consequence.r#type.clone();
+
+                    let nullable = match bind {
+                        Bind::Field => tree::typed::Expression::Load(name.clone()),
+                        Bind::Local => tree::typed::Expression::Variable(name.clone()),
+                    };
+                    let nullable = tree::typed::Typed {
+                        value: Box::new(nullable),
+                        r#type: t,
+                    };
+
+                    let if_let_then_else = tree::typed::Expression::IfLetThenElse(
+                        nullable,
+                        Some(name),
+                        consequence,
+                        alternative,
+                    );
+
+                    Ok(Self::Output {
+                        value: Box::new(if_let_then_else),
+                        r#type: branch_type,
+                    })
+                } else {
+                    let nullable = nullable.analyze(ctx)?;
+                    let inner = expect_nullable(&nullable.r#type)?;
+
+                    let consequence = if let Some(name) = &refined {
+                        ctx.scope(name, (Bind::Local, inner.clone()), |ctx| {
+                            consequence.analyze(ctx)
+                        })?
+                    } else {
+                        consequence.analyze(ctx)?
+                    };
+
+                    let alternative = alternative.analyze(ctx)?;
+
+                    type_equality(&consequence.r#type, &alternative.r#type)?;
+
+                    let branch_type = consequence.r#type.clone();
+                    let if_let_then_else = tree::typed::Expression::IfLetThenElse(
+                        nullable,
+                        refined,
+                        consequence,
+                        alternative,
+                    );
+
+                    Ok(Self::Output {
+                        value: Box::new(if_let_then_else),
+                        r#type: branch_type,
+                    })
+                }
+            }
             tree::ast::Expression::Seq(a, b) => {
-                let a = a.analyze(context)?;
+                let a = a.analyze(ctx)?;
                 type_equality(&a.r#type, &Type::Void)?;
 
-                let b = b.analyze(context)?;
+                let b = b.analyze(ctx)?;
                 let seq_type = b.r#type.clone();
 
                 let seq = tree::typed::Expression::Seq(a, b);
@@ -278,20 +357,20 @@ impl Analyze for tree::ast::Expression {
             tree::ast::Expression::Cascade(receiver, messages) => {
                 assert!(!messages.is_empty());
 
-                let receiver = receiver.analyze(context)?;
+                let receiver = receiver.analyze(ctx)?;
                 let class_type = expect_class(&receiver.r#type)?;
 
                 let mut new_messages = vec![];
                 let mut return_type = Type::Void;
 
                 for (selector, arguments) in messages {
-                    let method = context.lookup_instance_method(class_type, selector.clone())?;
+                    let method = ctx.lookup_instance_method(class_type, selector.clone())?;
 
                     assert!(method.param_types.len() == arguments.len());
 
                     let arguments = arguments
                         .into_iter()
-                        .map(|a| a.analyze(context))
+                        .map(|a| a.analyze(ctx))
                         .collect::<Result<Vec<_>, _>>()?;
 
                     for (a, b) in arguments.iter().zip(method.param_types.iter()) {
@@ -310,22 +389,19 @@ impl Analyze for tree::ast::Expression {
                 })
             }
             tree::ast::Expression::Assignment(field, new_value) => {
-                // TODO: specialize in-place
-                let field = field.analyze(context)?;
-
-                let tree::typed::Expression::Load(name) = &*field.value else {
-                    Err(AnalysisError::ExpectedField)?
+                let tree::ast::Expression::Variable(name) = l_value(*field)? else {
+                    unreachable!()
                 };
 
-                let (bind, t) = context.lookup_local(name)?;
+                let (bind, t) = ctx.lookup_local(&name)?;
                 if let Bind::Local = bind {
                     Err(AnalysisError::ExpectedVariable)?
                 }
 
-                let new_value = new_value.analyze(context)?;
+                let new_value = new_value.analyze(ctx)?;
                 type_equality(&new_value.r#type, &t)?;
 
-                let field_set = tree::typed::Expression::Store(name.clone(), new_value);
+                let field_set = tree::typed::Expression::Store(name, new_value);
 
                 Ok(Self::Output {
                     value: Box::new(field_set),
@@ -337,13 +413,13 @@ impl Analyze for tree::ast::Expression {
 
                 let arguments = arguments
                     .into_iter()
-                    .map(|a| a.analyze(context))
+                    .map(|a| a.analyze(ctx))
                     .collect::<Result<Vec<_>, _>>()?;
 
                 if let tree::ast::Expression::Variable(name) = &*receiver
-                    && let Ok(class) = context.lookup_class(name)
+                    && let Ok(class) = ctx.lookup_class(name)
                 {
-                    let method = context.lookup_class_method(class.class_type, selector.clone())?;
+                    let method = ctx.lookup_class_method(class.class_type, selector.clone())?;
 
                     assert!(method.param_types.len() == arguments.len());
 
@@ -359,10 +435,10 @@ impl Analyze for tree::ast::Expression {
                         r#type: method.return_type,
                     })
                 } else {
-                    let receiver = receiver.analyze(context)?;
+                    let receiver = receiver.analyze(ctx)?;
                     let class_type = expect_class(&receiver.r#type)?;
 
-                    let method = context.lookup_instance_method(class_type, selector.clone())?;
+                    let method = ctx.lookup_instance_method(class_type, selector.clone())?;
 
                     assert!(method.param_types.len() == arguments.len());
 
@@ -380,13 +456,13 @@ impl Analyze for tree::ast::Expression {
                 }
             }
             tree::ast::Expression::Instantiate(class_name, field_init) => {
-                let class = context.lookup_class(&class_name)?;
+                let class = ctx.lookup_class(&class_name)?;
 
                 let constructor = class.fields.clone();
 
                 let field_init = field_init
                     .into_iter()
-                    .map(|(name, value)| value.analyze(context).map(|v| (name, v)))
+                    .map(|(name, value)| value.analyze(ctx).map(|v| (name, v)))
                     .collect::<Result<Vec<_>, _>>()?;
 
                 if constructor.len() != field_init.len() {
@@ -407,8 +483,24 @@ impl Analyze for tree::ast::Expression {
                     r#type: Type::Class(class.class_type),
                 })
             }
-            tree::ast::Expression::Group(e) => e.analyze(context),
+            tree::ast::Expression::Group(e) => e.analyze(ctx),
         }
+    }
+}
+
+fn l_value(tree: tree::ast::Expression) -> Result<tree::ast::Expression, AnalysisError> {
+    if let tree::ast::Expression::Variable(_) = &tree {
+        Ok(tree)
+    } else {
+        Err(AnalysisError::ExpectedVariable)
+    }
+}
+
+fn expect_nullable(t: &Type) -> Result<Type, AnalysisError> {
+    if let Type::Nullable(inner) = t {
+        Ok(*inner.clone())
+    } else {
+        panic!("expect nullable")
     }
 }
 

@@ -7,6 +7,7 @@ class Node value: int next: ?Node
 class LinkedList head: ?Node
 
 let LinkedList empty? => bool
+def LinkedList empty? => if let head then false else true
 
 let LinkedList set-head: ?Node => void
 def LinkedList set-head: node => head = node

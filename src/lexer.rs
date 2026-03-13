@@ -32,6 +32,7 @@ pub enum Token {
     Then,
     Else,
     Let,
+    As,
     In,
     Def,
 
@@ -187,6 +188,7 @@ impl<'a> Lexer<'a> {
             "class" => Token::Class,
             "new" => Token::New,
             "if" => Token::If,
+            "as" => Token::As,
             "then" => Token::Then,
             "else" => Token::Else,
             "true" => Token::True,

@@ -148,17 +148,40 @@ impl<'a> Parser<'a> {
 
     fn parse_if(&mut self) -> ParseResult<ast::Expression> {
         self.expect(Token::If)?;
-        let condition = self.parse_expression()?;
-        self.expect(Token::Then)?;
-        let consequence = self.parse_expression()?;
-        self.expect(Token::Else)?;
-        let alternative = self.parse_expression()?;
 
-        Ok(ast::Expression::IfThenElse(
-            Box::new(condition),
-            Box::new(consequence),
-            Box::new(alternative),
-        ))
+        if self.consume(&Token::Let) {
+            let nullable = self.parse_expression()?;
+
+            let refined = if self.consume(&Token::As) {
+                Some(self.parse_ident()?)
+            } else {
+                None
+            };
+
+            self.expect(Token::Then)?;
+            let consequence = self.parse_expression()?;
+            self.expect(Token::Else)?;
+            let alternative = self.parse_expression()?;
+
+            Ok(ast::Expression::IfLetThenElse(
+                Box::new(nullable),
+                refined,
+                Box::new(consequence),
+                Box::new(alternative),
+            ))
+        } else {
+            let condition = self.parse_expression()?;
+            self.expect(Token::Then)?;
+            let consequence = self.parse_expression()?;
+            self.expect(Token::Else)?;
+            let alternative = self.parse_expression()?;
+
+            Ok(ast::Expression::IfThenElse(
+                Box::new(condition),
+                Box::new(consequence),
+                Box::new(alternative),
+            ))
+        }
     }
 
     fn parse_infix(&mut self, precedence: Precedence) -> ParseResult<ast::Expression> {
@@ -210,7 +233,7 @@ impl<'a> Parser<'a> {
             Token::Class => Precedence::End,
             Token::New => Precedence::End,
             Token::If | Token::Then | Token::Else => Precedence::End,
-            Token::Let | Token::In => Precedence::End,
+            Token::Let | Token::As | Token::In => Precedence::End,
             Token::Def => Precedence::End,
             Token::ErrorChar(_) | Token::ErrorString(_) => Precedence::End,
             Token::Eof => Precedence::End,

@@ -8,6 +8,12 @@ pub mod ast {
         ESelf,
         LetIn(String, Box<Expression>, Box<Expression>),
         IfThenElse(Box<Expression>, Box<Expression>, Box<Expression>),
+        IfLetThenElse(
+            Box<Expression>,
+            Option<String>,
+            Box<Expression>,
+            Box<Expression>,
+        ),
         Seq(Box<Expression>, Box<Expression>),
         Cascade(Box<Expression>, Vec<(Selector, Vec<Expression>)>),
         Assignment(Box<Expression>, Box<Expression>),
@@ -86,6 +92,12 @@ pub mod typed {
         ESelf,
         LetIn(String, Typed<Expression>, Typed<Expression>),
         IfThenElse(Typed<Expression>, Typed<Expression>, Typed<Expression>),
+        IfLetThenElse(
+            Typed<Expression>,
+            Option<String>,
+            Typed<Expression>,
+            Typed<Expression>,
+        ),
         Seq(Typed<Expression>, Typed<Expression>),
         Cascade(Typed<Expression>, Vec<(Selector, Vec<Typed<Expression>>)>),
         Load(String),
@@ -146,4 +158,47 @@ pub mod typed {
             }
         }
     }
+}
+
+#[allow(unused)]
+pub mod ir {
+    #[derive(Clone, Debug)]
+    pub enum Expression {
+        Variable(Local),
+        Constant(Constant),
+        SelfRef,
+
+        Let(Local, Box<Expression>, Box<Expression>),
+
+        If(Box<Expression>, Box<Expression>, Box<Expression>),
+        Seq(Box<Expression>, Box<Expression>),
+
+        FieldGet(Box<Expression>, FieldId),
+        FieldSet(Box<Expression>, FieldId, Box<Expression>),
+
+        InstanceCall(Box<Expression>, MethodId, Vec<Expression>),
+        ClassCall(ClassId, MethodId, Vec<Expression>),
+
+        Instantiate(ClassId, Vec<Expression>),
+    }
+
+    #[derive(Clone, Debug)]
+    pub enum Constant {
+        Null,
+        Int(i32),
+        Bool(bool),
+        Str(String),
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct Local(usize);
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct FieldId(usize);
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct MethodId(usize);
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct ClassId(usize);
 }
