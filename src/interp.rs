@@ -130,7 +130,7 @@ impl Eval for tree::typed::Expression {
                 .unwrap_or_else(|| panic!("{name} exists"))
                 .clone(),
             tree::typed::Expression::Constant(constant) => constant.eval(env),
-            tree::typed::Expression::ESelf => env.self_this.clone(),
+            tree::typed::Expression::SelfRef => env.self_this.clone(),
             tree::typed::Expression::LetIn(bind, value, next) => {
                 let evaled_value = value.eval(env);
 

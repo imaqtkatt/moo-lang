@@ -5,7 +5,7 @@ pub mod ast {
     pub enum Expression {
         Variable(String),
         Constant(Constant),
-        ESelf,
+        SelfRef,
         LetIn(String, Box<Expression>, Box<Expression>),
         IfThenElse(Box<Expression>, Box<Expression>, Box<Expression>),
         IfLetThenElse(
@@ -89,7 +89,7 @@ pub mod typed {
     pub enum Expression {
         Variable(String),
         Constant(Constant),
-        ESelf,
+        SelfRef,
         LetIn(String, Typed<Expression>, Typed<Expression>),
         IfThenElse(Typed<Expression>, Typed<Expression>, Typed<Expression>),
         IfLetThenElse(
@@ -134,6 +134,8 @@ pub mod typed {
         pub receiver: String,
         pub selector: Selector,
         pub parameters: Vec<String>,
+        pub parameter_types: Vec<crate::sema::Type>,
+        pub return_type: crate::sema::Type,
         pub body: Typed<Expression>,
     }
 
@@ -162,25 +164,33 @@ pub mod typed {
 
 #[allow(unused)]
 pub mod ir {
+    use std::rc::Rc;
+
+    use crate::{sema, shared::Selector};
+
     #[derive(Clone, Debug)]
-    pub enum Expression {
+    pub enum Expr {
         Variable(Local),
         Constant(Constant),
         SelfRef,
 
-        Let(Local, Box<Expression>, Box<Expression>),
+        Let(Local, Expression, Expression),
 
-        If(Box<Expression>, Box<Expression>, Box<Expression>),
-        Seq(Box<Expression>, Box<Expression>),
+        If(Expression, Expression, Expression),
+        Seq(Expression, Expression),
 
-        FieldGet(Box<Expression>, FieldId),
-        FieldSet(Box<Expression>, FieldId, Box<Expression>),
+        FieldGet(FieldId),
+        FieldSet(FieldId, Expression),
 
-        InstanceCall(Box<Expression>, MethodId, Vec<Expression>),
+        InstanceCall(Expression, MethodId, Vec<Expression>),
         ClassCall(ClassId, MethodId, Vec<Expression>),
 
         Instantiate(ClassId, Vec<Expression>),
+
+        IsNull(Expression),
     }
+
+    pub type Expression = Rc<Expr>;
 
     #[derive(Clone, Debug)]
     pub enum Constant {
@@ -190,15 +200,84 @@ pub mod ir {
         Str(String),
     }
 
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
     pub struct Local(usize);
 
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    impl Local {
+        pub fn new(id: usize) -> Self {
+            Self(id)
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
     pub struct FieldId(usize);
 
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    impl FieldId {
+        pub fn new(id: usize) -> Self {
+            Self(id)
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
     pub struct MethodId(usize);
 
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    impl MethodId {
+        pub fn new(id: usize) -> Self {
+            Self(id)
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
     pub struct ClassId(usize);
+
+    impl ClassId {
+        pub fn new(id: usize) -> Self {
+            Self(id)
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct Program {
+        classes: Vec<Class>,
+        methods: Vec<Method>,
+    }
+
+    impl Program {
+        pub fn new(classes: Vec<Class>, methods: Vec<Method>) -> Self {
+            Self { classes, methods }
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum MethodType {
+        Class,
+        Instance,
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct Class {
+        pub id: ClassId,
+        pub name: String,
+        pub fields: Vec<Field>,
+        pub methods: Vec<Method>,
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct Field {
+        pub id: FieldId,
+        pub name: String,
+        pub ty: sema::Type,
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct Method {
+        pub id: MethodId,
+        pub receiver: ClassId,
+        pub selector: Selector,
+        pub method_type: MethodType,
+        pub parameters: Vec<sema::Type>,
+        pub return_type: sema::Type,
+        pub locals: usize,
+        pub body: Expression,
+    }
 }

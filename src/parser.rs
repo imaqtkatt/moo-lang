@@ -95,7 +95,7 @@ impl<'a> Parser<'a> {
             Token::True => Ok(ast::Expression::Constant(ast::Constant::Boolean(true))),
             Token::False => Ok(ast::Expression::Constant(ast::Constant::Boolean(false))),
             Token::Null => Ok(ast::Expression::Constant(ast::Constant::Null)),
-            Token::TSelf => Ok(ast::Expression::ESelf),
+            Token::TSelf => Ok(ast::Expression::SelfRef),
             Token::LParens => {
                 let e = self.parse_expression()?;
                 self.expect(Token::RParens)?;

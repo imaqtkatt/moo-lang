@@ -232,8 +232,8 @@ impl Analyze for tree::ast::Expression {
                     r#type,
                 })
             }
-            tree::ast::Expression::ESelf => {
-                let e_self = tree::typed::Expression::ESelf;
+            tree::ast::Expression::SelfRef => {
+                let e_self = tree::typed::Expression::SelfRef;
 
                 Ok(Self::Output {
                     value: Box::new(e_self),
@@ -643,6 +643,8 @@ impl Define for tree::ast::MethodDefinition {
             receiver: self.receiver.clone(),
             selector: self.selector.clone(),
             parameters: self.parameters.clone(),
+            parameter_types: method.param_types.clone(),
+            return_type: method.return_type.clone(),
             body,
         })
     }

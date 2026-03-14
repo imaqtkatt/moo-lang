@@ -3,6 +3,7 @@ use std::io::Read;
 mod builtins;
 mod interp;
 mod lexer;
+mod lowering;
 mod parser;
 mod sema;
 mod shared;
