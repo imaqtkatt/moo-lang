@@ -7,8 +7,11 @@ use crate::{
 
 #[derive(Debug)]
 pub struct Context {
+    //
     // mutable fields
-    locals: BTreeMap<String, ir::Local>,
+    //
+    next_local: usize,
+    locals: BTreeMap<String, Vec<ir::Local>>,
     current_class: Option<ir::ClassId>,
 
     //
@@ -27,16 +30,27 @@ pub struct Context {
 
 impl Context {
     fn add_local(&mut self, name: &str) -> ir::Local {
-        let next_id = self.locals.len();
+        let next_id = self.next_local;
+        self.next_local += 1;
+
         let local = ir::Local::new(next_id);
 
-        self.locals.insert(String::from(name), local);
+        self.locals
+            .entry(String::from(name))
+            .or_default()
+            .push(local);
 
         local
     }
 
     fn lookup_local(&self, name: &str) -> ir::Local {
-        self.locals[name]
+        self.locals[name].last().copied().unwrap()
+    }
+
+    fn pop_local(&mut self, name: &str) {
+        if let Some(scope) = self.locals.get_mut(name) {
+            scope.pop();
+        }
     }
 
     fn next_class_id(&mut self, class_name: &str) -> ir::ClassId {
@@ -57,6 +71,15 @@ impl Context {
         method_id
     }
 
+    fn next_field_id(&mut self, field: (ir::ClassId, String)) -> ir::FieldId {
+        let next_id = self.field_id.len();
+        let field_id = ir::FieldId::new(next_id);
+        if self.field_id.insert(field, field_id).is_some() {
+            panic!("redefinition of field ..");
+        }
+        field_id
+    }
+
     fn register_class(&mut self, class: &typed::ClassDefinition) {
         self.next_class_id(&class.class_name);
     }
@@ -67,15 +90,16 @@ impl Context {
         self.class_type_to_id.insert(class.class_type, class_id);
 
         let mut fields = vec![];
-        for (id, (name, ty)) in class.fields.into_iter().enumerate() {
-            let field_id = ir::FieldId::new(id);
+        for (offset, (name, ty)) in class.fields.into_iter().enumerate() {
+            let field_id = self.next_field_id((class_id, name.clone()));
 
             let field = ir::Field {
                 id: field_id,
+                offset,
                 name: name.clone(),
                 ty,
             };
-            fields.push(field.clone());
+            fields.push(field_id);
 
             self.field_id.insert((class_id, name), field_id);
             self.fields.insert((class_id, field_id), field);
@@ -114,9 +138,10 @@ impl Context {
             };
 
             let result = lower_typed_expr(method.body, self);
-            let locals = self.locals.len();
+            let locals = self.next_local;
 
             self.current_class = None;
+            self.next_local = 0;
             self.locals.clear();
 
             (result, locals)
@@ -137,6 +162,12 @@ impl Context {
         };
 
         self.methods.insert(method_id, ir_method);
+
+        self.classes
+            .get_mut(&class_id)
+            .unwrap()
+            .methods
+            .push(method_id);
 
         method_id
     }
@@ -201,8 +232,9 @@ fn lower_let_in(
     let local = ctx.add_local(&bind);
 
     let lowered_next = lower_typed_expr(next, ctx);
+    ctx.pop_local(&bind);
 
-    ir::Expr::Let(local, lowered_value.into(), lowered_next.into())
+    ir::Expr::Let(local, lowered_value, lowered_next)
 }
 
 fn lower_if_then_else(
@@ -215,11 +247,7 @@ fn lower_if_then_else(
     let lowered_consequence = lower_typed_expr(consequence, ctx);
     let lowered_alternative = lower_typed_expr(alternative, ctx);
 
-    ir::Expr::If(
-        lowered_condition.into(),
-        lowered_consequence.into(),
-        lowered_alternative.into(),
-    )
+    ir::Expr::If(lowered_condition, lowered_consequence, lowered_alternative)
 }
 
 fn lower_if_let_then_else(
@@ -230,28 +258,37 @@ fn lower_if_let_then_else(
     alternative: typed::Typed<typed::Expression>,
 ) -> ir::Expr {
     let lowered_nullable = lower_typed_expr(nullable, ctx);
-    let lowered_consequence = lower_typed_expr(consequence, ctx);
-    let lowered_alternative = lower_typed_expr(alternative, ctx);
 
-    let check_is_null = ir::Expr::IsNull(lowered_nullable.clone().into());
+    let check_not_null = ir::Expression::new(ir::Expr::NotNull(lowered_nullable.clone()));
 
-    if let Some(refined) = refined {
+    let nullable_local = ctx.add_local("tmp:nullable");
+    let nullable_ref = ir::Expression::new(ir::Expr::Variable(nullable_local));
+
+    let if_then_else = if let Some(refined) = refined {
         let local = ctx.add_local(&refined);
-        let lowered_consequence =
-            ir::Expr::Let(local, lowered_nullable.into(), lowered_consequence.into());
 
-        ir::Expr::If(
-            check_is_null.into(),
-            lowered_consequence.into(),
-            lowered_alternative.into(),
-        )
+        let lowered_consequence = lower_typed_expr(consequence, ctx);
+
+        let lowered_consequence = ir::Expression::new(ir::Expr::Let(
+            local,
+            nullable_ref.clone(),
+            lowered_consequence,
+        ));
+
+        let lowered_alternative = lower_typed_expr(alternative, ctx);
+
+        ir::Expr::If(check_not_null, lowered_consequence, lowered_alternative)
     } else {
-        ir::Expr::If(
-            check_is_null.into(),
-            lowered_consequence.into(),
-            lowered_alternative.into(),
-        )
-    }
+        let lowered_consequence = lower_typed_expr(consequence, ctx);
+        let lowered_alternative = lower_typed_expr(alternative, ctx);
+        ir::Expr::If(check_not_null, lowered_consequence, lowered_alternative)
+    };
+
+    ir::Expr::Let(
+        nullable_local,
+        lowered_nullable,
+        ir::Expression::new(if_then_else),
+    )
 }
 
 fn lower_seq(
@@ -262,7 +299,7 @@ fn lower_seq(
     let a = lower_typed_expr(a, ctx);
     let b = lower_typed_expr(b, ctx);
 
-    ir::Expr::Seq(a.into(), b.into())
+    ir::Expr::Seq(a, b)
 }
 
 fn lower_cascade(
@@ -270,7 +307,7 @@ fn lower_cascade(
     receiver: typed::Typed<typed::Expression>,
     messages: Vec<(Selector, Vec<typed::Typed<typed::Expression>>)>,
 ) -> ir::Expr {
-    assert!(messages.len() >= 1);
+    assert!(messages.len() >= 2);
 
     let crate::sema::Type::Class(class_type) = receiver.r#type else {
         unreachable!()
@@ -278,28 +315,37 @@ fn lower_cascade(
     let class_id = ctx.class_type_to_id[&class_type];
     let lowered_receiver = lower_typed_expr(receiver, ctx);
 
+    let local_receiver = ctx.add_local("tmp:receiver");
+    let receiver = ir::Expression::new(ir::Expr::Variable(local_receiver));
+
     let mut lowered_calls = Vec::new();
 
     for (selector, arguments) in messages {
         let method_id = ctx.method_id[&(class_id, selector)];
         let lowered_arguments = lower_many(arguments, ctx);
-        let lowered_call =
-            ir::Expr::InstanceCall(lowered_receiver.clone(), method_id, lowered_arguments);
+        let lowered_call = ir::Expr::InstanceCall(receiver.clone(), method_id, lowered_arguments);
         lowered_calls.push(lowered_call);
     }
 
     let last = lowered_calls.pop().unwrap();
 
-    lowered_calls.into_iter().rfold(last, |acc, next| {
+    let seq = lowered_calls.into_iter().rfold(last, |acc, next| {
         ir::Expr::Seq(ir::Expression::new(next), ir::Expression::new(acc))
-    })
+    });
+
+    ir::Expr::Let(local_receiver, lowered_receiver, ir::Expression::new(seq))
 }
 
 fn lower_load(ctx: &mut Context, name: String) -> ir::Expr {
     let class = ctx.current_class.unwrap();
     let field_id = ctx.field_id[&(class, name)];
+    let field_offset = ctx.fields[&(class, field_id)].offset;
 
-    ir::Expr::FieldGet(field_id)
+    ir::Expr::FieldGet(
+        ir::Expression::new(ir::Expr::SelfRef),
+        field_id,
+        field_offset,
+    )
 }
 
 fn lower_store(
@@ -309,10 +355,16 @@ fn lower_store(
 ) -> ir::Expr {
     let class = ctx.current_class.unwrap();
     let field_id = ctx.field_id[&(class, name)];
+    let field_offset = ctx.fields[&(class, field_id)].offset;
 
     let lowered_value = lower_typed_expr(value, ctx);
 
-    ir::Expr::FieldSet(field_id, lowered_value.into())
+    ir::Expr::FieldSet(
+        ir::Expression::new(ir::Expr::SelfRef),
+        field_id,
+        field_offset,
+        lowered_value,
+    )
 }
 
 fn lower_instance_call(
@@ -332,7 +384,7 @@ fn lower_instance_call(
 
     let lowered_arguments = lower_many(arguments, ctx);
 
-    ir::Expr::InstanceCall(lowered_receiver.into(), method_id, lowered_arguments)
+    ir::Expr::InstanceCall(lowered_receiver, method_id, lowered_arguments)
 }
 
 fn lower_class_call(
@@ -376,6 +428,7 @@ pub fn lower_program(typed::Program(tree): typed::Program) -> ir::Program {
     }
 
     let mut ctx = Context {
+        next_local: 0,
         locals: Default::default(),
         current_class: None,
         class_type_to_id: Default::default(),
@@ -407,8 +460,9 @@ pub fn lower_program(typed::Program(tree): typed::Program) -> ir::Program {
 
     let classes = ctx.classes.into_values().collect();
     let methods = ctx.methods.into_values().collect();
+    let fields = ctx.fields.into_values().collect();
 
-    ir::Program::new(classes, methods)
+    ir::Program::new(classes, methods, fields)
 }
 
 #[cfg(test)]
@@ -423,6 +477,8 @@ mod test {
         let program = parser.parse_program().unwrap();
         let (analyzed, _) = crate::sema::analyze_program(program).unwrap();
         let lowered = lower_program(analyzed);
-        println!("{lowered:#?}")
+        println!("classes = {:?}", lowered.classes);
+        println!("\n\n\nmethods = {:?}", lowered.methods);
+        // println!("methods = {:?}", lowered.methods);
     }
 }

@@ -2,6 +2,7 @@ use std::io::Read;
 
 mod builtins;
 mod interp;
+mod interp_ir;
 mod lexer;
 mod lowering;
 mod parser;

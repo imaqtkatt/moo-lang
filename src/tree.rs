@@ -179,15 +179,15 @@ pub mod ir {
         If(Expression, Expression, Expression),
         Seq(Expression, Expression),
 
-        FieldGet(FieldId),
-        FieldSet(FieldId, Expression),
+        FieldGet(Expression, FieldId, usize),
+        FieldSet(Expression, FieldId, usize, Expression),
 
         InstanceCall(Expression, MethodId, Vec<Expression>),
         ClassCall(ClassId, MethodId, Vec<Expression>),
 
         Instantiate(ClassId, Vec<Expression>),
 
-        IsNull(Expression),
+        NotNull(Expression),
     }
 
     pub type Expression = Rc<Expr>;
@@ -201,7 +201,7 @@ pub mod ir {
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-    pub struct Local(usize);
+    pub struct Local(pub usize);
 
     impl Local {
         pub fn new(id: usize) -> Self {
@@ -219,7 +219,7 @@ pub mod ir {
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-    pub struct MethodId(usize);
+    pub struct MethodId(pub usize);
 
     impl MethodId {
         pub fn new(id: usize) -> Self {
@@ -228,7 +228,7 @@ pub mod ir {
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-    pub struct ClassId(usize);
+    pub struct ClassId(pub usize);
 
     impl ClassId {
         pub fn new(id: usize) -> Self {
@@ -238,13 +238,18 @@ pub mod ir {
 
     #[derive(Clone, Debug)]
     pub struct Program {
-        classes: Vec<Class>,
-        methods: Vec<Method>,
+        pub classes: Vec<Class>,
+        pub methods: Vec<Method>,
+        pub fields: Vec<Field>,
     }
 
     impl Program {
-        pub fn new(classes: Vec<Class>, methods: Vec<Method>) -> Self {
-            Self { classes, methods }
+        pub fn new(classes: Vec<Class>, methods: Vec<Method>, fields: Vec<Field>) -> Self {
+            Self {
+                classes,
+                methods,
+                fields,
+            }
         }
     }
 
@@ -258,13 +263,14 @@ pub mod ir {
     pub struct Class {
         pub id: ClassId,
         pub name: String,
-        pub fields: Vec<Field>,
-        pub methods: Vec<Method>,
+        pub fields: Vec<FieldId>,
+        pub methods: Vec<MethodId>,
     }
 
     #[derive(Clone, Debug)]
     pub struct Field {
         pub id: FieldId,
+        pub offset: usize,
         pub name: String,
         pub ty: sema::Type,
     }
