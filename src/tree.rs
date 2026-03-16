@@ -15,11 +15,26 @@ pub mod ast {
             Box<Expression>,
         ),
         Seq(Box<Expression>, Box<Expression>),
-        Cascade(Box<Expression>, Vec<(Selector, Vec<Expression>)>),
+        Cascade(Box<Expression>, Vec<(CallType, Vec<Expression>)>),
         Assignment(Box<Expression>, Box<Expression>),
-        Call(Box<Expression>, Selector, Vec<Expression>),
+        Call(Box<Expression>, CallType, Vec<Expression>),
         Instantiate(String, Vec<(String, Expression)>),
         Group(Box<Expression>),
+    }
+
+    #[derive(Clone, Debug)]
+    pub enum CallType {
+        Unary(Selector),
+        Keyword(Selector),
+    }
+
+    impl CallType {
+        pub fn selector(self) -> Selector {
+            match self {
+                CallType::Unary(selector) => selector,
+                CallType::Keyword(selector) => selector,
+            }
+        }
     }
 
     #[derive(Clone, Debug)]
@@ -203,44 +218,22 @@ pub mod ir {
     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
     pub struct Local(pub usize);
 
-    impl Local {
-        pub fn new(id: usize) -> Self {
-            Self(id)
-        }
-    }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-    pub struct FieldId(usize);
-
-    impl FieldId {
-        pub fn new(id: usize) -> Self {
-            Self(id)
-        }
-    }
+    pub struct FieldId(pub usize);
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
     pub struct MethodId(pub usize);
 
-    impl MethodId {
-        pub fn new(id: usize) -> Self {
-            Self(id)
-        }
-    }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
     pub struct ClassId(pub usize);
-
-    impl ClassId {
-        pub fn new(id: usize) -> Self {
-            Self(id)
-        }
-    }
 
     #[derive(Clone, Debug)]
     pub struct Program {
         pub classes: Vec<Class>,
         pub methods: Vec<Method>,
         pub fields: Vec<Field>,
+
+        pub entrypoint: Option<MethodId>,
     }
 
     impl Program {
@@ -249,6 +242,7 @@ pub mod ir {
                 classes,
                 methods,
                 fields,
+                entrypoint: None,
             }
         }
     }
@@ -257,6 +251,15 @@ pub mod ir {
     pub enum MethodType {
         Class,
         Instance,
+    }
+
+    impl From<crate::tree::typed::MethodType> for MethodType {
+        fn from(value: crate::tree::typed::MethodType) -> Self {
+            match value {
+                super::typed::MethodType::Class => Self::Class,
+                super::typed::MethodType::Instance => Self::Instance,
+            }
+        }
     }
 
     #[derive(Clone, Debug)]

@@ -33,7 +33,7 @@ impl Context {
         let next_id = self.next_local;
         self.next_local += 1;
 
-        let local = ir::Local::new(next_id);
+        let local = ir::Local(next_id);
 
         self.locals
             .entry(String::from(name))
@@ -55,7 +55,7 @@ impl Context {
 
     fn next_class_id(&mut self, class_name: &str) -> ir::ClassId {
         let next_id = self.class_id.len();
-        let class_id = ir::ClassId::new(next_id);
+        let class_id = ir::ClassId(next_id);
         if self.class_id.insert(class_name.into(), class_id).is_some() {
             panic!("redefinition of {class_name}");
         };
@@ -64,7 +64,7 @@ impl Context {
 
     fn next_method_id(&mut self, selector: (ir::ClassId, Selector)) -> ir::MethodId {
         let next_id = self.method_id.len();
-        let method_id = ir::MethodId::new(next_id);
+        let method_id = ir::MethodId(next_id);
         if self.method_id.insert(selector, method_id).is_some() {
             panic!("redefinition of method ..");
         }
@@ -73,7 +73,7 @@ impl Context {
 
     fn next_field_id(&mut self, field: (ir::ClassId, String)) -> ir::FieldId {
         let next_id = self.field_id.len();
-        let field_id = ir::FieldId::new(next_id);
+        let field_id = ir::FieldId(next_id);
         if self.field_id.insert(field, field_id).is_some() {
             panic!("redefinition of field ..");
         }
@@ -140,20 +140,15 @@ impl Context {
             let result = lower_typed_expr(method.body, self);
             let locals = self.next_local;
 
-            self.current_class = None;
-            self.next_local = 0;
-            self.locals.clear();
+            self.reset_context();
 
             (result, locals)
         };
 
         let ir_method = ir::Method {
             id: method_id,
-            method_type: match method.method_type {
-                typed::MethodType::Class => ir::MethodType::Class,
-                typed::MethodType::Instance => ir::MethodType::Instance,
-            },
-            receiver: self.class_id[&method.receiver],
+            method_type: method.method_type.into(),
+            receiver: class_id,
             selector: method.selector,
             parameters: method.parameter_types,
             return_type: method.return_type,
@@ -170,6 +165,12 @@ impl Context {
             .push(method_id);
 
         method_id
+    }
+
+    fn reset_context(&mut self) {
+        self.current_class = None;
+        self.next_local = 0;
+        self.locals.clear();
     }
 }
 

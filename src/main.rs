@@ -36,7 +36,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Err(e) => panic!("{e:?}"),
     };
 
-    let value = interp::eval_program(program);
+    let program = lowering::lower_program(program);
+
+    let value = interp_ir::eval_ir_program(program);
     println!("{value:?}");
 
     Ok(())

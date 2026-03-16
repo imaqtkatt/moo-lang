@@ -289,14 +289,18 @@ impl<'a> Parser<'a> {
 
     fn parse_unary_call(&mut self, lhs: ast::Expression) -> ParseResult<ast::Expression> {
         let selector = self.parse_ident().map(|op| Selector::unary(&op))?;
-        Ok(ast::Expression::Call(Box::new(lhs), selector, vec![]))
+        Ok(ast::Expression::Call(
+            Box::new(lhs),
+            ast::CallType::Unary(selector),
+            vec![],
+        ))
     }
 
     fn parse_keyword_call(&mut self, mut lhs: ast::Expression) -> ParseResult<ast::Expression> {
         let keyword = self.parse_keyword()?;
         let argument = self.parse_infix(Precedence::KeywordCall.left())?;
 
-        if let ast::Expression::Call(_r, s, a) = &mut lhs {
+        if let ast::Expression::Call(_r, ast::CallType::Keyword(s), a) = &mut lhs {
             *s = s.push(&keyword);
             a.push(argument);
 
@@ -304,7 +308,7 @@ impl<'a> Parser<'a> {
         } else {
             Ok(ast::Expression::Call(
                 Box::new(lhs),
-                Selector::new().push(&keyword),
+                ast::CallType::Keyword(Selector::new().push(&keyword)),
                 vec![argument],
             ))
         }

@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, ptr::null};
+use std::collections::BTreeMap;
 
 use crate::{
     shared::Selector,
@@ -364,6 +364,8 @@ impl Analyze for tree::ast::Expression {
                 let mut return_type = Type::Void;
 
                 for (selector, arguments) in messages {
+                    let selector = selector.selector();
+
                     let method = ctx.lookup_instance_method(class_type, selector.clone())?;
 
                     assert!(method.param_types.len() == arguments.len());
@@ -410,6 +412,7 @@ impl Analyze for tree::ast::Expression {
             }
             tree::ast::Expression::Call(receiver, selector, arguments) => {
                 // if receiver is referencing a class name generate a ClassCall
+                let selector = selector.selector();
 
                 let arguments = arguments
                     .into_iter()

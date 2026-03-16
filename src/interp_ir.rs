@@ -9,7 +9,7 @@ pub enum Value {
     Instance(Instance),
 }
 
-#[derive(Debug)]
+// #[derive(Debug)]
 pub struct Instance {
     class: ir::ClassId,
     fields: std::rc::Rc<std::cell::RefCell<Vec<Value>>>,
@@ -33,9 +33,14 @@ impl Instance {
     }
 }
 
+impl std::fmt::Debug for Instance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{{{:?}}}", self.fields.borrow())
+    }
+}
+
 pub struct Env {
-    self_ref: Value,
-    locals: Vec<Value>,
+    frames: Vec<Frame>,
 
     //
     classes: Vec<ir::Class>,
@@ -43,13 +48,28 @@ pub struct Env {
     fields: Vec<ir::Field>,
 }
 
+struct Frame {
+    curr_class: ir::ClassId,
+    curr_method: ir::MethodId,
+
+    self_ref: Value,
+    locals: Vec<Value>,
+}
+
 impl Env {
+    fn self_ref(&self) -> Value {
+        let curr_frame = self.frames.len() - 1;
+        self.frames[curr_frame].self_ref.clone()
+    }
+
     fn get_local(&self, ir::Local(idx): &ir::Local) -> Value {
-        self.locals[*idx].clone()
+        let curr_frame = self.frames.len() - 1;
+        self.frames[curr_frame].locals[*idx].clone()
     }
 
     fn put_local(&mut self, ir::Local(idx): &ir::Local, value: Value) {
-        self.locals[*idx] = value;
+        let curr_frame = self.frames.len() - 1;
+        self.frames[curr_frame].locals[*idx] = value;
     }
 
     fn lookup_method(&self, ir::MethodId(idx): &ir::MethodId) -> ir::Method {
@@ -61,16 +81,20 @@ impl Env {
     }
 }
 
-pub fn eval_ir_expr(env: &mut Env, e: &ir::Expr) -> Value {
+fn eval_ir_constant(constant: &ir::Constant) -> Value {
+    match constant {
+        ir::Constant::Null => Value::Null,
+        ir::Constant::Int(i) => Value::Int(*i),
+        ir::Constant::Bool(b) => Value::Bool(*b),
+        ir::Constant::Str(s) => Value::Str(String::from(s)),
+    }
+}
+
+fn eval_ir_expr(env: &mut Env, e: &ir::Expr) -> Value {
     match e {
         ir::Expr::Variable(local) => env.get_local(local),
-        ir::Expr::Constant(constant) => match constant {
-            ir::Constant::Null => Value::Null,
-            ir::Constant::Int(i) => Value::Int(*i),
-            ir::Constant::Bool(b) => Value::Bool(*b),
-            ir::Constant::Str(s) => Value::Str(String::from(s)),
-        },
-        ir::Expr::SelfRef => env.self_ref.clone(),
+        ir::Expr::Constant(constant) => eval_ir_constant(constant),
+        ir::Expr::SelfRef => env.self_ref(),
         ir::Expr::Let(local, value, next) => {
             let evaled_value = eval_ir_expr(env, value);
 
@@ -88,14 +112,14 @@ pub fn eval_ir_expr(env: &mut Env, e: &ir::Expr) -> Value {
             eval_ir_expr(env, b)
         }
         ir::Expr::FieldGet(_instance, _field_id, offset) => {
-            let Value::Instance(instance) = &env.self_ref else {
+            let Value::Instance(instance) = env.self_ref() else {
                 unreachable!()
             };
             let fields = instance.fields.borrow();
             fields[*offset].clone()
         }
         ir::Expr::FieldSet(_receiver, _field_id, offset, value) => {
-            let Value::Instance(instance) = env.self_ref.clone() else {
+            let Value::Instance(instance) = env.self_ref() else {
                 unreachable!()
             };
             let mut fields = instance.fields.borrow_mut();
@@ -136,8 +160,8 @@ pub fn eval_ir_expr(env: &mut Env, e: &ir::Expr) -> Value {
     }
 }
 
-fn eval_ir_many(env: &mut Env, exs: &Vec<ir::Expression>) -> Vec<Value> {
-    exs.into_iter().map(|e| eval_ir_expr(env, e)).collect()
+fn eval_ir_many(env: &mut Env, exs: &[ir::Expression]) -> Vec<Value> {
+    exs.iter().map(|e| eval_ir_expr(env, e)).collect()
 }
 
 fn method_call(env: &mut Env, method: ir::Method, new_this: Value, arguments: Vec<Value>) -> Value {
@@ -147,21 +171,23 @@ fn method_call(env: &mut Env, method: ir::Method, new_this: Value, arguments: Ve
         new_locals[slot] = argument;
     }
 
-    let old_this = std::mem::replace(&mut env.self_ref, new_this);
-    let old_locals = std::mem::replace(&mut env.locals, new_locals);
+    env.frames.push(Frame {
+        curr_class: method.receiver,
+        curr_method: method.id,
+        self_ref: new_this,
+        locals: new_locals,
+    });
 
     let result = eval_ir_expr(env, &method.body);
 
-    env.self_ref = old_this;
-    env.locals = old_locals;
+    _ = env.frames.pop().unwrap();
 
     result
 }
 
 pub fn eval_ir_program(tree: ir::Program) -> Value {
     let env = Env {
-        self_ref: Value::Null,
-        locals: vec![],
+        frames: vec![],
         classes: tree.classes,
         methods: tree.methods,
         fields: tree.fields,
@@ -178,13 +204,7 @@ pub fn eval_ir_program(tree: ir::Program) -> Value {
     let main_method = env
         .methods
         .iter()
-        .find_map(|m| {
-            if m.receiver == main_class && m.selector == Selector::unary("main") {
-                Some(m)
-            } else {
-                None
-            }
-        })
+        .find(|m| m.receiver == main_class && m.selector == Selector::unary("main"))
         .cloned()
         .into_iter()
         .next()
@@ -201,7 +221,7 @@ mod test {
 
     #[test]
     fn test_interp_ir() {
-        let source = include_str!("../examples/test-setter.moo");
+        let source = include_str!("../examples/linked-list.moo");
         let lexer = crate::lexer::Lexer::new(source);
         let mut parser = crate::parser::Parser::new(lexer);
         let program = parser.parse_program().unwrap();
