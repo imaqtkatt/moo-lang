@@ -133,6 +133,7 @@ impl<'a> Parser<'a> {
     fn parse_new(&mut self) -> ParseResult<ast::Expression> {
         self.expect(Token::New)?;
         let class_name = self.parse_ident()?;
+        let generics = self.parse_generics(|p| p.parse_type())?;
 
         let mut field_init = Vec::new();
 
@@ -143,7 +144,9 @@ impl<'a> Parser<'a> {
             field_init.push((keyword, parameter));
         }
 
-        Ok(ast::Expression::Instantiate(class_name, field_init))
+        Ok(ast::Expression::Instantiate(
+            class_name, generics, field_init,
+        ))
     }
 
     fn parse_if(&mut self) -> ParseResult<ast::Expression> {
@@ -221,6 +224,7 @@ impl<'a> Parser<'a> {
             Token::LParens => Precedence::UnaryCall,
             //
             Token::RParens => Precedence::End,
+            Token::LBracket | Token::RBracket => Precedence::End,
             Token::Comma => Precedence::Cascade,
             Token::Semicolon => Precedence::Seq,
             Token::Equal => Precedence::Assign,
@@ -318,7 +322,7 @@ impl<'a> Parser<'a> {
 impl<'a> Parser<'a> {
     fn parse_primary_type(&mut self) -> ParseResult<ast::Type> {
         match self.eat() {
-            Token::Ident(i) => Ok(ast::Type::Named(i)),
+            Token::Ident(i) => self.parse_generic_type(i),
             Token::TypeVoid => Ok(ast::Type::Void),
             Token::TypeInt => Ok(ast::Type::Int),
             Token::TypeBool => Ok(ast::Type::Bool),
@@ -343,6 +347,12 @@ impl<'a> Parser<'a> {
         self.expect(Token::QuestionMark)?;
         let t = self.parse_type()?;
         Ok(ast::Type::Nullable(Box::new(t)))
+    }
+
+    fn parse_generic_type(&mut self, named: String) -> ParseResult<ast::Type> {
+        let types = self.parse_generics(|p| p.parse_type())?;
+
+        Ok(ast::Type::Named(named, types))
     }
 }
 
@@ -377,6 +387,8 @@ impl<'a> Parser<'a> {
         self.expect(Token::Class)?;
         let class_name = self.parse_ident()?;
 
+        let generics = self.parse_generics(|p| p.parse_ident())?;
+
         let mut fields = vec![];
 
         while let Token::Keyword(_) = self.peek() {
@@ -386,7 +398,11 @@ impl<'a> Parser<'a> {
             fields.push((field_name, field_type));
         }
 
-        Ok(ast::ClassDefinition { class_name, fields })
+        Ok(ast::ClassDefinition {
+            class_name,
+            generics,
+            fields,
+        })
     }
 
     fn parse_method_type(&mut self) -> ParseResult<ast::MethodType> {
@@ -396,6 +412,27 @@ impl<'a> Parser<'a> {
         } else {
             Ok(ast::MethodType::Instance)
         }
+    }
+
+    fn parse_generics<T>(
+        &mut self,
+        f: impl Fn(&mut Parser) -> ParseResult<T>,
+    ) -> ParseResult<Vec<T>> {
+        let mut generics = vec![];
+
+        if self.consume(&Token::LBracket) {
+            while !self.is(&Token::RBracket) {
+                generics.push(f(self)?);
+                if self.consume(&Token::Comma) {
+                    continue;
+                } else {
+                    break;
+                }
+            }
+            self.expect(Token::RBracket)?;
+        }
+
+        Ok(generics)
     }
 
     fn parse_method_let(&mut self) -> ParseResult<ast::MethodDeclaration> {

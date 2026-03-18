@@ -18,7 +18,7 @@ pub mod ast {
         Cascade(Box<Expression>, Vec<(CallType, Vec<Expression>)>),
         Assignment(Box<Expression>, Box<Expression>),
         Call(Box<Expression>, CallType, Vec<Expression>),
-        Instantiate(String, Vec<(String, Expression)>),
+        Instantiate(String, Vec<Type>, Vec<(String, Expression)>),
         Group(Box<Expression>),
     }
 
@@ -52,13 +52,14 @@ pub mod ast {
         Bool,
         Str,
 
-        Named(String),
+        Named(String, Vec<Type>),
         Nullable(Box<Type>),
     }
 
     #[derive(Clone, Debug)]
     pub struct ClassDefinition {
         pub class_name: String,
+        pub generics: Vec<String>,
         pub fields: Vec<(String, Type)>,
     }
 

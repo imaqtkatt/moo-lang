@@ -14,6 +14,8 @@ pub enum Token {
 
     LParens,
     RParens,
+    LBracket,
+    RBracket,
 
     Comma,
     Semicolon,
@@ -50,7 +52,7 @@ pub struct Lexer<'a> {
 }
 
 fn is_ident(c: &char) -> bool {
-    " \r\n\t():;,".find(*c).is_none()
+    " \r\n\t()[]=>:;,".find(*c).is_none()
 }
 
 impl<'a> Lexer<'a> {
@@ -151,6 +153,8 @@ impl<'a> Lexer<'a> {
             match c {
                 '(' => Token::LParens,
                 ')' => Token::RParens,
+                '[' => Token::LBracket,
+                ']' => Token::RBracket,
                 ',' => Token::Comma,
                 ';' => Token::Semicolon,
                 '?' => Token::QuestionMark,

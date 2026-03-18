@@ -310,7 +310,7 @@ fn lower_cascade(
 ) -> ir::Expr {
     assert!(messages.len() >= 2);
 
-    let crate::sema::Type::Class(class_type) = receiver.r#type else {
+    let crate::sema::Type::Class(class_type, _) = receiver.r#type else {
         unreachable!()
     };
     let class_id = ctx.class_type_to_id[&class_type];
@@ -374,7 +374,7 @@ fn lower_instance_call(
     selector: Selector,
     arguments: Vec<typed::Typed<typed::Expression>>,
 ) -> ir::Expr {
-    let crate::sema::Type::Class(class_type) = receiver.r#type else {
+    let crate::sema::Type::Class(class_type, _) = receiver.r#type else {
         unreachable!()
     };
     let class_id = ctx.class_type_to_id[&class_type];
