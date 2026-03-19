@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::{
+    sema,
     shared::Selector,
     tree::{ir, typed},
 };
@@ -26,6 +27,8 @@ pub struct Context {
 
     field_id: BTreeMap<(ir::ClassId, String), ir::FieldId>,
     fields: BTreeMap<(ir::ClassId, ir::FieldId), ir::Field>,
+
+    type_context: sema::TypeContext,
 }
 
 impl Context {
@@ -310,10 +313,10 @@ fn lower_cascade(
 ) -> ir::Expr {
     assert!(messages.len() >= 2);
 
-    let crate::sema::Type::Class(class_type, _) = receiver.r#type else {
+    let crate::sema::Type::Class(class_type, _) = ctx.type_context.get(receiver.r#type) else {
         unreachable!()
     };
-    let class_id = ctx.class_type_to_id[&class_type];
+    let class_id = ctx.class_type_to_id[class_type];
     let lowered_receiver = lower_typed_expr(receiver, ctx);
 
     let local_receiver = ctx.add_local("tmp:receiver");
@@ -374,10 +377,12 @@ fn lower_instance_call(
     selector: Selector,
     arguments: Vec<typed::Typed<typed::Expression>>,
 ) -> ir::Expr {
-    let crate::sema::Type::Class(class_type, _) = receiver.r#type else {
+    // let class_type_id = receiver.r#type;
+    // let class_type = todo!();
+    let crate::sema::Type::Class(class_type, _) = ctx.type_context.get(receiver.r#type) else {
         unreachable!()
     };
-    let class_id = ctx.class_type_to_id[&class_type];
+    let class_id = ctx.class_type_to_id[class_type];
 
     let lowered_receiver = lower_typed_expr(receiver, ctx);
 
@@ -417,7 +422,10 @@ fn lower_instantiate(
     ir::Expr::Instantiate(class_id, fields)
 }
 
-pub fn lower_program(typed::Program(tree): typed::Program) -> ir::Program {
+pub fn lower_program(
+    typed::Program(tree): typed::Program,
+    type_context: sema::TypeContext,
+) -> (ir::Program, sema::TypeContext) {
     let mut classes = vec![];
     let mut methods = vec![];
 
@@ -430,6 +438,7 @@ pub fn lower_program(typed::Program(tree): typed::Program) -> ir::Program {
 
     let mut ctx = Context {
         next_local: 0,
+        type_context,
         locals: Default::default(),
         current_class: None,
         class_type_to_id: Default::default(),
@@ -463,7 +472,7 @@ pub fn lower_program(typed::Program(tree): typed::Program) -> ir::Program {
     let methods = ctx.methods.into_values().collect();
     let fields = ctx.fields.into_values().collect();
 
-    ir::Program::new(classes, methods, fields)
+    (ir::Program::new(classes, methods, fields), ctx.type_context)
 }
 
 #[cfg(test)]
@@ -476,8 +485,8 @@ mod test {
         let lexer = crate::lexer::Lexer::new(source);
         let mut parser = crate::parser::Parser::new(lexer);
         let program = parser.parse_program().unwrap();
-        let (analyzed, _) = crate::sema::analyze_program(program).unwrap();
-        let lowered = lower_program(analyzed);
+        let (analyzed, ctx) = crate::sema::analyze_program(program).unwrap();
+        let (lowered, _) = lower_program(analyzed, ctx.type_context);
         println!("classes = {:?}", lowered.classes);
         println!("\n\n\nmethods = {:?}", lowered.methods);
         // println!("methods = {:?}", lowered.methods);

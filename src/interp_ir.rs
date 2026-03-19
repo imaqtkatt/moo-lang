@@ -1,4 +1,4 @@
-use crate::{shared::Selector, tree::ir};
+use crate::{sema, shared::Selector, tree::ir};
 
 #[derive(Clone, Debug)]
 pub enum Value {
@@ -225,8 +225,8 @@ mod test {
         let lexer = crate::lexer::Lexer::new(source);
         let mut parser = crate::parser::Parser::new(lexer);
         let program = parser.parse_program().unwrap();
-        let (analyzed, _) = crate::sema::analyze_program(program).unwrap();
-        let lowered = crate::lowering::lower_program(analyzed);
+        let (analyzed, ctx) = crate::sema::analyze_program(program).unwrap();
+        let (lowered, _) = crate::lowering::lower_program(analyzed, ctx.type_context);
 
         println!("{:?}", eval_ir_program(lowered));
     }

@@ -134,14 +134,14 @@ pub mod typed {
     #[derive(Clone, Debug)]
     pub struct Typed<A: Clone> {
         pub value: Box<A>,
-        pub r#type: crate::sema::Type,
+        pub r#type: crate::sema::TypeId,
     }
 
     #[derive(Clone, Debug)]
     pub struct ClassDefinition {
         pub class_type: crate::sema::ClassType,
         pub class_name: String,
-        pub fields: Vec<(String, crate::sema::Type)>,
+        pub fields: Vec<(String, crate::sema::TypeId)>,
     }
 
     #[derive(Clone, Debug)]
@@ -150,8 +150,8 @@ pub mod typed {
         pub receiver: String,
         pub selector: Selector,
         pub parameters: Vec<String>,
-        pub parameter_types: Vec<crate::sema::Type>,
-        pub return_type: crate::sema::Type,
+        pub parameter_types: Vec<crate::sema::TypeId>,
+        pub return_type: crate::sema::TypeId,
         pub body: Typed<Expression>,
     }
 
@@ -276,7 +276,7 @@ pub mod ir {
         pub id: FieldId,
         pub offset: usize,
         pub name: String,
-        pub ty: sema::Type,
+        pub ty: sema::TypeId,
     }
 
     #[derive(Clone, Debug)]
@@ -285,8 +285,8 @@ pub mod ir {
         pub receiver: ClassId,
         pub selector: Selector,
         pub method_type: MethodType,
-        pub parameters: Vec<sema::Type>,
-        pub return_type: sema::Type,
+        pub parameters: Vec<sema::TypeId>,
+        pub return_type: sema::TypeId,
         pub locals: usize,
         pub body: Expression,
     }

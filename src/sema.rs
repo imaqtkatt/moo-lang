@@ -14,12 +14,14 @@ pub struct Context {
     pub instance_methods: BTreeMap<(ClassType, Selector), Method>,
     pub class_methods: BTreeMap<(ClassType, Selector), Method>,
 
-    pub class_instantiations: BTreeMap<(ClassType, Vec<Type>), ClassInstance>,
+    pub class_instantiations: BTreeMap<(ClassType, Vec<TypeId>), ClassInstance>,
 
     // pub method_instantiations: BTreeMap<(ClassType, Selector)>,
-    locals: BTreeMap<String, (Bind, Type)>,
+    locals: BTreeMap<String, (Bind, TypeId)>,
 
-    type_variables: BTreeMap<String, Type>,
+    type_variables: BTreeMap<String, TypeId>,
+
+    pub type_context: TypeContext,
     // substitutions: BTreeMap<TypeVar, Type>,
 }
 
@@ -31,6 +33,7 @@ pub enum AnalysisError {
     UnboundClass(String),
     MissingDeclaration(Selector),
     ExpectedClass,
+    ExpectedNullable,
     ExpectedVariable,
     ExpectedField,
     ConstructorInitError,
@@ -40,15 +43,16 @@ pub enum AnalysisError {
 
 #[derive(Clone, Debug)]
 pub struct Method {
-    param_types: Vec<Type>,
-    return_type: Type,
+    param_types: Vec<TypeId>,
+    return_type: TypeId,
 }
 
 #[derive(Clone, Debug)]
 pub struct Class {
     pub class_type: ClassType,
     pub generics: Vec<String>,
-    pub fields: Vec<(String, Type)>,
+    type_vars: Vec<TypeId>,
+    pub fields: Vec<(String, TypeId)>,
 }
 
 impl Class {
@@ -56,21 +60,18 @@ impl Class {
         Self {
             class_type,
             generics: Vec::from(generics),
+            type_vars: Vec::new(),
             fields: Vec::new(),
         }
-    }
-
-    fn with_field(mut self, field_name: String, field_type: Type) -> Self {
-        self.fields.push((field_name, field_type));
-        self
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct ClassInstance {
     pub class_type: ClassType,
-    pub generics: Vec<Type>,
-    pub fields: Vec<(String, Type)>,
+    pub type_id: TypeId,
+    pub generics: Vec<TypeId>,
+    pub fields: Vec<(String, TypeId)>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -79,14 +80,57 @@ enum Bind {
     Local,
 }
 
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct TypeId(usize);
+
+#[derive(Debug, Default)]
+pub struct TypeContext {
+    next_id: usize,
+    types: Vec<Type>,
+}
+
+const NULL_TYPE: TypeId = TypeId(0);
+const VOID_TYPE: TypeId = TypeId(1);
+const INT_TYPE: TypeId = TypeId(2);
+const BOOL_TYPE: TypeId = TypeId(3);
+const STR_TYPE: TypeId = TypeId(4);
+
+impl TypeContext {
+    pub fn new() -> Self {
+        let mut context = Self::default();
+        context.put(Type::Null);
+        context.put(Type::Void);
+        context.put(Type::Int);
+        context.put(Type::Bool);
+        context.put(Type::Str);
+        context
+    }
+
+    pub fn put(&mut self, t: Type) -> TypeId {
+        let id = self.next_id;
+        let type_id = TypeId(id);
+        self.next_id += 1;
+
+        self.types.push(t);
+
+        type_id
+    }
+
+    pub fn get(&self, TypeId(id): TypeId) -> &Type {
+        &self.types[id]
+    }
+}
+
+// TODO: implement pretty print for Type
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Type {
     Void,
     Int,
     Bool,
     Str,
-    Class(ClassType, Vec<Type>),
-    Nullable(Box<Type>),
+    Class(ClassType, Vec<TypeId>),
+    Nullable(TypeId),
     TypeVar(TypeVar),
 
     Null,
@@ -96,39 +140,36 @@ pub enum Type {
 pub struct TypeVar(usize);
 
 impl Type {
-    fn subtype(a: &Type, b: &Type) -> bool {
+    fn subtype(type_context: &TypeContext, a: &Type, b: &Type) -> bool {
         match (a, b) {
             (Type::Void, Type::Void) => true,
             (Type::Int, Type::Int) => true,
             (Type::Bool, Type::Bool) => true,
             (Type::Str, Type::Str) => true,
-            (Type::Class(a, b), Type::Class(c, d)) => a == c && b == d,
 
-            (Type::Nullable(a), Type::Nullable(b)) => Type::subtype(a, b),
+            (Type::Class(a, b), Type::Class(c, d)) if a == c => {
+                b.iter().zip(d.iter()).all(|(x, y)| {
+                    let x = type_context.get(*x);
+                    let y = type_context.get(*y);
+                    Type::subtype(type_context, x, y)
+                })
+            }
+
+            (Type::Nullable(a), Type::Nullable(b)) => {
+                let a = type_context.get(*a);
+                let b = type_context.get(*b);
+                Type::subtype(type_context, a, b)
+            }
+
             (Type::Null, Type::Nullable(_)) => true,
-            (a, Type::Nullable(b)) => Type::subtype(a, b),
+            (a, Type::Nullable(b)) => {
+                let b = type_context.get(*b);
+                Type::subtype(type_context, a, b)
+            }
 
             (Type::TypeVar(a), Type::TypeVar(b)) => a == b,
 
             (_, _) => false,
-        }
-    }
-
-    fn instantiate(&self, args: &[Type]) -> Type {
-        match self {
-            Type::TypeVar(type_var) => args[type_var.0].clone(),
-            Type::Nullable(inner) => Type::Nullable(Box::new(inner.instantiate(args))),
-            Type::Class(name, xs) => Type::Class(
-                name.clone(),
-                xs.into_iter().map(|a| a.instantiate(args)).collect(),
-            ),
-            _ => self.clone(),
-            // Type::Class(class_type) => todo!(),
-            // Type::Void => todo!(),
-            // Type::Int => todo!(),
-            // Type::Bool => todo!(),
-            // Type::Str => todo!(),
-            // Type::Null => todo!(),
         }
     }
 }
@@ -155,25 +196,6 @@ pub trait Define {
     fn define(self, ctx: &mut Context) -> Result<Self::Output, AnalysisError>;
 }
 
-fn type_equality(a: &Type, b: &Type) -> Result<(), AnalysisError> {
-    if Type::subtype(a, b) {
-        Ok(())
-    } else {
-        Err(AnalysisError::TypeError {
-            expected: b.clone(),
-            got: a.clone(),
-        })
-    }
-}
-
-fn expect_class(a: &Type) -> Result<(ClassType, Vec<Type>), AnalysisError> {
-    if let Type::Class(class_type, types) = a {
-        Ok((*class_type, types.clone()))
-    } else {
-        Err(AnalysisError::ExpectedClass)
-    }
-}
-
 impl Context {
     fn new_class(&mut self) -> ClassType {
         let current = self.next_class;
@@ -184,7 +206,7 @@ impl Context {
     fn scope<T>(
         &mut self,
         name: &str,
-        value: (Bind, Type),
+        value: (Bind, TypeId),
         scope: impl FnOnce(&mut Context) -> T,
     ) -> T {
         self.bind(name, value);
@@ -193,14 +215,14 @@ impl Context {
         result
     }
 
-    fn lookup_local(&self, name: &str) -> Result<(Bind, Type), AnalysisError> {
+    fn lookup_local(&self, name: &str) -> Result<(Bind, TypeId), AnalysisError> {
         self.locals
             .get(name)
             .cloned()
             .ok_or(AnalysisError::UnboundVariable(String::from(name)))
     }
 
-    fn bind(&mut self, name: &str, value: (Bind, Type)) -> Option<(Bind, Type)> {
+    fn bind(&mut self, name: &str, value: (Bind, TypeId)) -> Option<(Bind, TypeId)> {
         self.locals.insert(String::from(name), value)
     }
 
@@ -232,11 +254,11 @@ impl Context {
             .ok_or(AnalysisError::UnboundClassMethod(selector))
     }
 
-    fn bind_type_variable(&mut self, name: &str, t: Type) {
+    fn bind_type_variable(&mut self, name: &str, t: TypeId) {
         self.type_variables.insert(String::from(name), t);
     }
 
-    fn lookup_type_variable(&self, name: &str) -> Result<Type, AnalysisError> {
+    fn lookup_type_variable(&self, name: &str) -> Result<TypeId, AnalysisError> {
         self.type_variables
             .get(name)
             .cloned()
@@ -246,7 +268,7 @@ impl Context {
     fn instantiate_class(
         &mut self,
         class_name: &str,
-        args: Vec<Type>,
+        args: Vec<TypeId>,
     ) -> Result<ClassInstance, AnalysisError> {
         let class = self.lookup_class(class_name)?;
 
@@ -256,108 +278,91 @@ impl Context {
             .class_instantiations
             .get(&(class.class_type, args.clone()))
         {
+            // println!("{class_instance:?}...");
             return Ok(class_instance.clone());
         }
 
-        println!("instantiating class with args = {args:?}");
+        // println!("instantiating class with args = {args:?}");
 
         let instantiated_fields = class
             .fields
             .iter()
-            .map(|(name, t)| (name.clone(), t.instantiate(&args)))
+            .map(|(name, t)| (name.clone(), self.instantiate(*t, &args)))
             .collect::<Vec<_>>();
 
+        // println!("class fields = {:?}", class.fields);
         println!("instantiated_fields = {instantiated_fields:?}");
+
+        let type_id = self
+            .type_context
+            .put(Type::Class(class.class_type, args.clone()));
+
+        use std::collections::btree_map::Entry;
 
         match self
             .class_instantiations
             .entry((class.class_type, args.clone()))
         {
-            std::collections::btree_map::Entry::Vacant(v) => Ok(v
+            Entry::Vacant(v) => Ok(v
                 .insert(ClassInstance {
                     class_type: class.class_type,
+                    type_id,
                     generics: args,
                     fields: instantiated_fields,
                 })
                 .clone()),
-            std::collections::btree_map::Entry::Occupied(_) => unreachable!(),
+            Entry::Occupied(_) => unreachable!(),
         }
     }
 
-    // fn apply_substitutions(&self, a: &Type) -> Type {
-    //     match a {
-    //         Type::TypeVar(type_var) => {
-    //             if let Some(s) = self.substitutions.get(&type_var) {
-    //                 s.clone()
-    //             } else {
-    //                 a.clone()
-    //             }
-    //         }
-    //         Type::Class(class_type, items) => Type::Class(
-    //             *class_type,
-    //             items
-    //                 .into_iter()
-    //                 .map(|t| self.apply_substitutions(t))
-    //                 .collect(),
-    //         ),
-    //         Type::Nullable(t) => Type::Nullable(Box::new(self.apply_substitutions(t))),
-    //         t => t.clone(),
-    //     }
-    // }
+    fn instantiate(&mut self, a: TypeId, args: &[TypeId]) -> TypeId {
+        match self.type_context.get(a).clone() {
+            Type::TypeVar(type_var) => args[type_var.0],
+            Type::Class(class_type, generics) => {
+                let new_generics = generics
+                    .into_iter()
+                    .map(|g| self.instantiate(g, args))
+                    .collect();
 
-    // fn type_equality(&mut self, a: &Type, b: &Type) -> Result<(), AnalysisError> {
-    //     let a = self.apply_substitutions(a);
-    //     let b = self.apply_substitutions(b);
+                self.type_context.put(Type::Class(class_type, new_generics))
+            }
+            Type::Nullable(nullable) => {
+                let new_nullable = self.instantiate(nullable, args);
+                self.type_context.put(Type::Nullable(new_nullable))
+            }
+            Type::Void | Type::Int | Type::Bool | Type::Str | Type::Null => a,
+        }
+    }
 
-    //     match (a, b) {
-    //         (Type::Void, Type::Void) => Ok(()),
+    fn type_equality(&self, a: TypeId, b: TypeId) -> Result<(), AnalysisError> {
+        if a == b {
+            return Ok(());
+        }
 
-    //         (Type::Int, Type::Int) => Ok(()),
+        let a = self.type_context.get(a);
+        let b = self.type_context.get(b);
 
-    //         (Type::Bool, Type::Bool) => Ok(()),
-
-    //         (Type::Str, Type::Str) => Ok(()),
-
-    //         (Type::Class(a, b), Type::Class(c, d)) if a == c => {
-    //             for (x, y) in b.iter().zip(d.iter()) {
-    //                 self.type_equality(x, y)?
-    //             }
-
-    //             Ok(())
-    //         }
-
-    //         (Type::Nullable(_), Type::Nullable(_)) => todo!(),
-    //         (Type::Nullable(_), Type::Null) | (Type::Null, Type::Nullable(_)) => todo!(),
-
-    //         (Type::TypeVar(type_var), x) | (x, Type::TypeVar(type_var)) => {
-    //             if x == Type::TypeVar(type_var) {
-    //                 return Ok(());
-    //             }
-
-    //             if x.occurs(type_var) {
-    //                 panic!("infinite type");
-    //             }
-
-    //             self.substitutions.insert(type_var, x.clone());
-
-    //             Ok(())
-    //         }
-
-    //         (_, _) => todo!(),
-    //     }
-    // }
-}
-
-impl Type {
-    fn occurs(&self, type_var: TypeVar) -> bool {
-        match self {
-            Type::TypeVar(tv) => *tv == type_var,
-            Type::Void | Type::Int | Type::Bool | Type::Str | Type::Null => false,
-            Type::Class(_, items) => items.iter().any(|i| i.occurs(type_var)),
-            Type::Nullable(nullable) => nullable.occurs(type_var),
+        if Type::subtype(&self.type_context, a, b) {
+            Ok(())
+        } else {
+            Err(AnalysisError::TypeError {
+                expected: b.clone(),
+                got: a.clone(),
+            })
         }
     }
 }
+
+// impl Type {
+//     fn occurs(&self, type_var: TypeVar) -> bool {
+//         match self {
+//             Type::TypeVar(tv) => *tv == type_var,
+//             Type::Void | Type::Int | Type::Bool | Type::Str | Type::Null => false,
+//             Type::Class(_, items) => items.iter().any(|i| i.occurs(type_var)),
+//             Type::Nullable(nullable) => nullable.occurs(type_var),
+//         }
+//     }
+// }
 
 impl Analyze for tree::ast::Expression {
     type Output = tree::typed::Typed<tree::typed::Expression>;
@@ -379,14 +384,14 @@ impl Analyze for tree::ast::Expression {
             }
             tree::ast::Expression::Constant(constant) => {
                 let (constant, r#type) = match constant {
-                    tree::ast::Constant::Null => (tree::typed::Constant::Null, Type::Null),
+                    tree::ast::Constant::Null => (tree::typed::Constant::Null, NULL_TYPE),
                     tree::ast::Constant::Integer(i) => {
-                        (tree::typed::Constant::Integer(i), Type::Int)
+                        (tree::typed::Constant::Integer(i), INT_TYPE)
                     }
                     tree::ast::Constant::Boolean(b) => {
-                        (tree::typed::Constant::Boolean(b), Type::Bool)
+                        (tree::typed::Constant::Boolean(b), BOOL_TYPE)
                     }
-                    tree::ast::Constant::String(s) => (tree::typed::Constant::String(s), Type::Str),
+                    tree::ast::Constant::String(s) => (tree::typed::Constant::String(s), STR_TYPE),
                 };
 
                 let constant = tree::typed::Expression::Constant(constant);
@@ -401,16 +406,15 @@ impl Analyze for tree::ast::Expression {
 
                 Ok(Self::Output {
                     value: Box::new(e_self),
-                    r#type: ctx.locals["self"].1.clone(),
+                    r#type: ctx.locals["self"].1,
                 })
             }
             tree::ast::Expression::LetIn(bind, value, next) => {
                 let value = value.analyze(ctx)?;
 
-                let next = ctx.scope(&bind, (Bind::Local, value.r#type.clone()), |ctx| {
-                    next.analyze(ctx)
-                })?;
-                let next_t = next.r#type.clone();
+                let next =
+                    ctx.scope(&bind, (Bind::Local, value.r#type), |ctx| next.analyze(ctx))?;
+                let next_t = next.r#type;
 
                 let let_in = tree::typed::Expression::LetIn(bind, value, next);
 
@@ -421,14 +425,14 @@ impl Analyze for tree::ast::Expression {
             }
             tree::ast::Expression::IfThenElse(condition, consequence, alternative) => {
                 let condition = condition.analyze(ctx)?;
-                type_equality(&condition.r#type, &Type::Bool)?;
+                ctx.type_equality(condition.r#type, BOOL_TYPE)?;
 
                 let consequence = consequence.analyze(ctx)?;
                 let alternative = alternative.analyze(ctx)?;
 
-                type_equality(&consequence.r#type, &alternative.r#type)?;
+                ctx.type_equality(consequence.r#type, alternative.r#type)?;
 
-                let branch_type = consequence.r#type.clone();
+                let branch_type = consequence.r#type;
                 let if_then_else =
                     tree::typed::Expression::IfThenElse(condition, consequence, alternative);
 
@@ -440,7 +444,7 @@ impl Analyze for tree::ast::Expression {
             tree::ast::Expression::IfLetThenElse(nullable, refined, consequence, alternative) => {
                 if let tree::ast::Expression::Variable(name) = *nullable {
                     let (bind, t) = ctx.lookup_local(&name)?;
-                    let inner = expect_nullable(&t)?;
+                    let inner = expect_nullable(ctx.type_context.get(t))?;
 
                     if refined.is_some() {
                         todo!("alias on variable")
@@ -451,8 +455,8 @@ impl Analyze for tree::ast::Expression {
 
                     let alternative = alternative.analyze(ctx)?;
 
-                    type_equality(&consequence.r#type, &alternative.r#type)?;
-                    let branch_type = consequence.r#type.clone();
+                    ctx.type_equality(consequence.r#type, alternative.r#type)?;
+                    let branch_type = consequence.r#type;
 
                     let nullable = match bind {
                         Bind::Field => tree::typed::Expression::Load(name.clone()),
@@ -476,21 +480,19 @@ impl Analyze for tree::ast::Expression {
                     })
                 } else {
                     let nullable = nullable.analyze(ctx)?;
-                    let inner = expect_nullable(&nullable.r#type)?;
+                    let inner = expect_nullable(ctx.type_context.get(nullable.r#type))?;
 
                     let consequence = if let Some(name) = &refined {
-                        ctx.scope(name, (Bind::Local, inner.clone()), |ctx| {
-                            consequence.analyze(ctx)
-                        })?
+                        ctx.scope(name, (Bind::Local, inner), |ctx| consequence.analyze(ctx))?
                     } else {
                         consequence.analyze(ctx)?
                     };
 
                     let alternative = alternative.analyze(ctx)?;
 
-                    type_equality(&consequence.r#type, &alternative.r#type)?;
+                    ctx.type_equality(consequence.r#type, alternative.r#type)?;
 
-                    let branch_type = consequence.r#type.clone();
+                    let branch_type = consequence.r#type;
                     let if_let_then_else = tree::typed::Expression::IfLetThenElse(
                         nullable,
                         refined,
@@ -506,10 +508,10 @@ impl Analyze for tree::ast::Expression {
             }
             tree::ast::Expression::Seq(a, b) => {
                 let a = a.analyze(ctx)?;
-                type_equality(&a.r#type, &Type::Void)?;
+                ctx.type_equality(a.r#type, VOID_TYPE)?;
 
                 let b = b.analyze(ctx)?;
-                let seq_type = b.r#type.clone();
+                let seq_type = b.r#type;
 
                 let seq = tree::typed::Expression::Seq(a, b);
 
@@ -522,29 +524,38 @@ impl Analyze for tree::ast::Expression {
                 assert!(!messages.is_empty());
 
                 let receiver = receiver.analyze(ctx)?;
-                let (class_type, _) = expect_class(&receiver.r#type)?;
+                let (class_type, types) = expect_class(ctx.type_context.get(receiver.r#type))?;
 
                 let mut new_messages = vec![];
-                let mut return_type = Type::Void;
+                let mut return_type = VOID_TYPE;
 
                 for (selector, arguments) in messages {
                     let selector = selector.selector();
 
                     let method = ctx.lookup_instance_method(class_type, selector.clone())?;
 
-                    assert!(method.param_types.len() == arguments.len());
+                    // TODO: create an instantiate_method function
+                    let method_param_types = method
+                        .param_types
+                        .into_iter()
+                        .map(|t| ctx.instantiate(t, &types))
+                        .collect::<Vec<_>>();
+                    // let method_return_type = method.return_type.instantiate(&types);
+                    let method_return_type = ctx.instantiate(method.return_type, &types);
+
+                    assert!(method_param_types.len() == arguments.len());
 
                     let arguments = arguments
                         .into_iter()
                         .map(|a| a.analyze(ctx))
                         .collect::<Result<Vec<_>, _>>()?;
 
-                    for (a, b) in arguments.iter().zip(method.param_types.iter()) {
-                        type_equality(&a.r#type, b)?;
+                    for (a, b) in arguments.iter().zip(method_param_types.iter()) {
+                        ctx.type_equality(a.r#type, *b)?;
                     }
 
                     new_messages.push((selector, arguments));
-                    return_type = method.return_type.clone();
+                    return_type = method_return_type;
                 }
 
                 let cascade = tree::typed::Expression::Cascade(receiver, new_messages);
@@ -565,13 +576,13 @@ impl Analyze for tree::ast::Expression {
                 }
 
                 let new_value = new_value.analyze(ctx)?;
-                type_equality(&new_value.r#type, &t)?;
+                ctx.type_equality(new_value.r#type, t)?;
 
                 let field_set = tree::typed::Expression::Store(name, new_value);
 
                 Ok(Self::Output {
                     value: Box::new(field_set),
-                    r#type: Type::Void,
+                    r#type: VOID_TYPE,
                 })
             }
             tree::ast::Expression::Call(receiver, selector, arguments) => {
@@ -591,7 +602,7 @@ impl Analyze for tree::ast::Expression {
                     assert!(method.param_types.len() == arguments.len());
 
                     for (a, b) in arguments.iter().zip(method.param_types.iter()) {
-                        type_equality(&a.r#type, b)?;
+                        ctx.type_equality(a.r#type, *b)?;
                     }
 
                     let class_call =
@@ -603,7 +614,7 @@ impl Analyze for tree::ast::Expression {
                     })
                 } else {
                     let receiver = receiver.analyze(ctx)?;
-                    let (class_type, types) = expect_class(&receiver.r#type)?;
+                    let (class_type, types) = expect_class(ctx.type_context.get(receiver.r#type))?;
                     println!("class_type = {class_type:?} with {types:?}");
 
                     let method = ctx.lookup_instance_method(class_type, selector.clone())?;
@@ -612,14 +623,15 @@ impl Analyze for tree::ast::Expression {
                     let method_param_types = method
                         .param_types
                         .into_iter()
-                        .map(|t| t.instantiate(&types))
+                        .map(|t| ctx.instantiate(t, &types))
                         .collect::<Vec<_>>();
-                    let method_return_type = method.return_type.instantiate(&types);
+                    // let method_return_type = method.return_type.instantiate(&types);
+                    let method_return_type = ctx.instantiate(method.return_type, &types);
 
                     assert!(method_param_types.len() == arguments.len());
 
                     for (a, b) in arguments.iter().zip(method_param_types.iter()) {
-                        type_equality(&a.r#type, b)?;
+                        ctx.type_equality(a.r#type, *b)?;
                     }
 
                     let instance_call =
@@ -638,7 +650,7 @@ impl Analyze for tree::ast::Expression {
                     .collect::<Result<Vec<_>, _>>()?;
                 let class = ctx.instantiate_class(&class_name, analyzed_types.clone())?;
 
-                println!("expr instantiate = {class:?}");
+                // println!("expr instantiate = {class:?}");
 
                 // let class = ctx.lookup_class(&class_name)?;
 
@@ -650,6 +662,10 @@ impl Analyze for tree::ast::Expression {
                     .collect::<Result<Vec<_>, _>>()?;
 
                 if constructor.len() != field_init.len() {
+                    println!(
+                        "{:?} - {constructor:?} and {field_init:?}",
+                        class.class_type
+                    );
                     Err(AnalysisError::ConstructorInitError)?
                 }
 
@@ -657,14 +673,16 @@ impl Analyze for tree::ast::Expression {
                     if a != c {
                         Err(AnalysisError::FieldInitError)?
                     }
-                    type_equality(&d.r#type, b)?;
+                    ctx.type_equality(d.r#type, *b)?;
                 }
 
                 let instantiate = tree::typed::Expression::Instantiate(class_name, field_init);
 
+                let return_type = class.type_id;
+
                 Ok(Self::Output {
                     value: Box::new(instantiate),
-                    r#type: Type::Class(class.class_type, analyzed_types),
+                    r#type: return_type,
                 })
             }
             tree::ast::Expression::Group(e) => e.analyze(ctx),
@@ -680,49 +698,57 @@ fn l_value(tree: tree::ast::Expression) -> Result<tree::ast::Expression, Analysi
     }
 }
 
-fn expect_nullable(t: &Type) -> Result<Type, AnalysisError> {
-    if let Type::Nullable(inner) = t {
-        Ok(*inner.clone())
+fn expect_class(a: &Type) -> Result<(ClassType, Vec<TypeId>), AnalysisError> {
+    if let Type::Class(class_type, types) = a {
+        Ok((*class_type, types.clone()))
     } else {
-        panic!("expect nullable")
+        Err(AnalysisError::ExpectedClass)
+    }
+}
+
+fn expect_nullable(t: &Type) -> Result<TypeId, AnalysisError> {
+    if let Type::Nullable(inner) = t {
+        Ok(*inner)
+    } else {
+        Err(AnalysisError::ExpectedNullable)
     }
 }
 
 impl Analyze for tree::ast::Type {
-    type Output = Type;
+    type Output = TypeId;
 
-    fn analyze(self, context: &mut Context) -> Result<Self::Output, AnalysisError> {
+    fn analyze(self, ctx: &mut Context) -> Result<Self::Output, AnalysisError> {
         let analyzed = match self {
-            tree::ast::Type::Void => Self::Output::Void,
-            tree::ast::Type::Int => Self::Output::Int,
-            tree::ast::Type::Bool => Self::Output::Bool,
-            tree::ast::Type::Str => Self::Output::Str,
+            tree::ast::Type::Void => VOID_TYPE,
+            tree::ast::Type::Int => INT_TYPE,
+            tree::ast::Type::Bool => BOOL_TYPE,
+            tree::ast::Type::Str => STR_TYPE,
             tree::ast::Type::Named(name, args) => {
                 // let mut scopes = vec![context.classes, context.type_variables];
                 // println!("{:?}", context.type_variables);
-                if let Ok(t) = context.lookup_type_variable(&name) {
+                if let Ok(t) = ctx.lookup_type_variable(&name) {
                     assert!(args.is_empty());
                     return Ok(t);
                 }
 
-                _ = context.lookup_class(&name)?;
+                let class = ctx.lookup_class(&name)?;
 
-                println!("args = {args:?}");
+                // println!("args = {args:?}");
 
                 let args = args
                     .into_iter()
-                    .map(|a| a.analyze(context))
-                    .collect::<Result<_, _>>()?;
+                    .map(|a| a.analyze(ctx))
+                    .collect::<Result<Vec<_>, _>>()?;
 
-                let instance = context.instantiate_class(&name, args)?;
+                // let instance = context.instantiate_class(&name, args.clone())?;
 
-                println!("instance = {instance:?}");
+                // println!("instance = {instance:?}");
 
-                Self::Output::Class(instance.class_type, instance.generics)
+                ctx.type_context.put(Type::Class(class.class_type, args))
             }
             tree::ast::Type::Nullable(inner) => {
-                let inner = inner.analyze(context)?;
-                Self::Output::Nullable(Box::new(inner))
+                let inner = inner.analyze(ctx)?;
+                ctx.type_context.put(Type::Nullable(inner))
             }
         };
         Ok(analyzed)
@@ -732,42 +758,49 @@ impl Analyze for tree::ast::Type {
 impl Declare for tree::ast::ClassDefinition {
     type Output = ();
 
-    fn declare(&self, mut context: Context) -> Result<(Self::Output, Context), AnalysisError> {
-        let this_class = context.new_class();
+    fn declare(&self, mut ctx: Context) -> Result<(Self::Output, Context), AnalysisError> {
+        let this_class = ctx.new_class();
 
-        context.classes.insert(
+        ctx.classes.insert(
             self.class_name.clone(),
             Class::non_defined(this_class, &self.generics),
         );
 
-        Ok(((), context))
+        Ok(((), ctx))
     }
 }
 
 impl Define for tree::ast::ClassDefinition {
     type Output = tree::typed::ClassDefinition;
 
-    fn define(self, context: &mut Context) -> Result<Self::Output, AnalysisError> {
-        let mut this_class = context.lookup_class(&self.class_name)?;
+    fn define(self, ctx: &mut Context) -> Result<Self::Output, AnalysisError> {
+        let mut this_class = ctx.lookup_class(&self.class_name)?;
         let class_type = this_class.class_type;
 
         {
             // println!("{:?}", this_class.generics);
             for (id, name) in this_class.generics.iter().enumerate() {
-                context.bind_type_variable(name, Type::TypeVar(TypeVar(id)));
+                let t = ctx.type_context.put(Type::TypeVar(TypeVar(id)));
+                this_class.type_vars.push(t);
+                ctx.bind_type_variable(name, t);
             }
 
             for (name, t) in self.fields.iter() {
-                let t = t.clone().analyze(context)?;
+                let t = t.clone().analyze(ctx)?;
                 // println!("{name} = {t:?}");
                 this_class.fields.push((name.clone(), t))
             }
 
-            context.type_variables.clear();
+            println!(
+                "{} with id {:?} has fields {:?}",
+                self.class_name, class_type, self.fields
+            );
+
+            ctx.type_variables.clear();
         }
 
         let fields = this_class.fields.clone();
-        context.classes.insert(self.class_name.clone(), this_class);
+        ctx.classes.insert(self.class_name.clone(), this_class);
 
         Ok(Self::Output {
             class_type,
@@ -780,23 +813,28 @@ impl Define for tree::ast::ClassDefinition {
 impl Declare for tree::ast::MethodDeclaration {
     type Output = ();
 
-    fn declare(&self, mut context: Context) -> Result<(Self::Output, Context), AnalysisError> {
-        let class = context.lookup_class(&self.receiver)?;
+    fn declare(&self, mut ctx: Context) -> Result<(Self::Output, Context), AnalysisError> {
+        let class = ctx.lookup_class(&self.receiver)?;
 
         let (param_types, return_type) = {
-            for (id, name) in class.generics.iter().enumerate() {
-                context.bind_type_variable(name, Type::TypeVar(TypeVar(id)));
+            // for (id, name) in class.generics.iter().enumerate() {
+            //     // TODO: we are probably wasting type insertions
+            //     let t = ctx.type_context.insert_type(Type::TypeVar(TypeVar(id)));
+            //     ctx.bind_type_variable(name, t);
+            // }
+            for (name, tv) in class.generics.iter().zip(class.type_vars.iter()) {
+                ctx.bind_type_variable(name, *tv);
             }
 
             let param_types = self
                 .parameters
                 .iter()
                 .cloned()
-                .map(|t| t.analyze(&mut context))
+                .map(|t| t.analyze(&mut ctx))
                 .collect::<Result<Vec<_>, _>>()?;
-            let return_type = self.body.clone().analyze(&mut context)?;
+            let return_type = self.body.clone().analyze(&mut ctx)?;
 
-            context.type_variables.clear();
+            ctx.type_variables.clear();
 
             (param_types, return_type)
         };
@@ -808,33 +846,42 @@ impl Declare for tree::ast::MethodDeclaration {
 
         match self.method_type {
             tree::ast::MethodType::Class => {
-                context
-                    .class_methods
+                ctx.class_methods
                     .insert((class.class_type, self.selector.clone()), method);
             }
             tree::ast::MethodType::Instance => {
-                context
-                    .instance_methods
+                ctx.instance_methods
                     .insert((class.class_type, self.selector.clone()), method);
             }
         };
 
-        Ok(((), context))
+        Ok(((), ctx))
     }
 }
 
 impl Define for tree::ast::MethodDefinition {
     type Output = tree::typed::MethodDefinition;
 
-    fn define(self, context: &mut Context) -> Result<Self::Output, AnalysisError> {
-        let class = context.lookup_class(&self.receiver)?;
+    fn define(self, ctx: &mut Context) -> Result<Self::Output, AnalysisError> {
+        let class = ctx.lookup_class(&self.receiver)?;
+
+        // let mut generics = Vec::new();
+        // for (id, name) in class.generics.iter().enumerate() {
+        //     // TODO: we are probably wasting type insertions
+        //     let g = ctx.type_context.insert_type(Type::TypeVar(TypeVar(id)));
+        //     ctx.bind_type_variable(name, g);
+        //     generics.push(g);
+        // }
+        for (name, tv) in class.generics.iter().zip(class.type_vars.iter()) {
+            ctx.bind_type_variable(name, *tv);
+        }
 
         let method = match self.method_type {
             tree::ast::MethodType::Class => {
-                context.lookup_class_method(class.class_type, self.selector.clone())
+                ctx.lookup_class_method(class.class_type, self.selector.clone())
             }
             tree::ast::MethodType::Instance => {
-                context.lookup_instance_method(class.class_type, self.selector.clone())
+                ctx.lookup_instance_method(class.class_type, self.selector.clone())
             }
         };
         let method = method.map_err(|e| match e {
@@ -846,24 +893,30 @@ impl Define for tree::ast::MethodDefinition {
 
         let body = {
             if matches!(self.method_type, tree::ast::MethodType::Instance) {
+                ctx.locals.insert(
+                    String::from("self"),
+                    (
+                        Bind::Local,
+                        ctx.type_context
+                            .put(Type::Class(class.class_type, class.type_vars)),
+                    ),
+                );
+
                 for (a, b) in class.fields.iter().cloned() {
-                    _ = context.bind(&a, (Bind::Field, b));
+                    _ = ctx.bind(&a, (Bind::Field, b));
                 }
             }
             for (a, b) in self.parameters.iter().zip(method.param_types.iter()) {
-                _ = context.bind(a, (Bind::Local, b.clone()));
+                _ = ctx.bind(a, (Bind::Local, *b));
             }
 
-            context.locals.insert(
-                String::from("self"),
-                (Bind::Local, Type::Class(class.class_type, vec![])),
-            );
-
-            let body = self.body.analyze(context)?;
-            type_equality(&body.r#type, &method.return_type)?;
-            context.locals.clear();
+            let body = self.body.analyze(ctx)?;
+            ctx.type_equality(body.r#type, method.return_type)?;
+            ctx.locals.clear();
             body
         };
+
+        ctx.type_variables.clear();
 
         Ok(Self::Output {
             method_type: self.method_type.into(),
@@ -871,7 +924,7 @@ impl Define for tree::ast::MethodDefinition {
             selector: self.selector.clone(),
             parameters: self.parameters.clone(),
             parameter_types: method.param_types.clone(),
-            return_type: method.return_type.clone(),
+            return_type: method.return_type,
             body,
         })
     }
@@ -883,7 +936,7 @@ pub fn analyze_program(
 ) -> Result<(tree::typed::Program, Context), AnalysisError> {
     let decls = tree.0;
 
-    let mut context = Context {
+    let mut ctx = Context {
         next_class: 0,
         classes: BTreeMap::new(),
 
@@ -894,45 +947,47 @@ pub fn analyze_program(
         locals: BTreeMap::new(),
 
         type_variables: BTreeMap::new(),
+
+        type_context: TypeContext::new(),
     };
 
-    let string_class = {
-        let string_class = context.new_class();
-        context.classes.insert(
-            String::from("String"),
-            Class::non_defined(string_class, &[]).with_field(String::from("inner"), Type::Str),
-        );
-        context.class_methods.insert(
-            (string_class, Selector::new().push("str")),
-            Method {
-                param_types: vec![Type::Str],
-                return_type: Type::Class(string_class, vec![]),
-            },
-        );
-        context.instance_methods.insert(
-            (string_class, Selector::new().push("with")),
-            Method {
-                param_types: vec![Type::Class(string_class, vec![])],
-                return_type: Type::Class(string_class, vec![]),
-            },
-        );
+    // let string_class = {
+    //     let string_class = context.new_class();
+    //     context.classes.insert(
+    //         String::from("String"),
+    //         Class::non_defined(string_class, &[]).with_field(String::from("inner"), STR_TYPE),
+    //     );
+    //     context.class_methods.insert(
+    //         (string_class, Selector::new().push("str")),
+    //         Method {
+    //             param_types: vec![STR_TYPE],
+    //             return_type: Type::Class(string_class, vec![]),
+    //         },
+    //     );
+    //     context.instance_methods.insert(
+    //         (string_class, Selector::new().push("with")),
+    //         Method {
+    //             param_types: vec![Type::Class(string_class, vec![])],
+    //             return_type: Type::Class(string_class, vec![]),
+    //         },
+    //     );
 
-        string_class
-    };
-    {
-        let io_class = context.new_class();
-        context
-            .classes
-            .insert(String::from("IO"), Class::non_defined(io_class, &[]));
+    //     string_class
+    // };
+    // {
+    //     let io_class = context.new_class();
+    //     context
+    //         .classes
+    //         .insert(String::from("IO"), Class::non_defined(io_class, &[]));
 
-        context.class_methods.insert(
-            (io_class, Selector::new().push("print-line")),
-            Method {
-                param_types: vec![Type::Class(string_class, vec![])],
-                return_type: Type::Void,
-            },
-        );
-    }
+    //     context.class_methods.insert(
+    //         (io_class, Selector::new().push("print-line")),
+    //         Method {
+    //             param_types: vec![Type::Class(string_class, vec![])],
+    //             return_type: Type::Void,
+    //         },
+    //     );
+    // }
 
     let mut top_levels = Vec::new();
 
@@ -952,26 +1007,26 @@ pub fn analyze_program(
     }
 
     for class_definition in class_defs.iter() {
-        let ((), new_context) = class_definition.clone().declare(context)?;
-        context = new_context
+        let ((), new_context) = class_definition.clone().declare(ctx)?;
+        ctx = new_context
     }
 
     for class_definition in class_defs.into_iter() {
-        let c = class_definition.define(&mut context)?;
+        let c = class_definition.define(&mut ctx)?;
         top_levels.push(tree::typed::TopLevel::ClassDefinition(c));
     }
 
     for method_declaration in method_decls.into_iter() {
-        let ((), new_context) = method_declaration.declare(context)?;
-        context = new_context;
+        let ((), new_context) = method_declaration.declare(ctx)?;
+        ctx = new_context;
     }
 
     for method_definition in method_defs.into_iter() {
-        let md = method_definition.define(&mut context)?;
+        let md = method_definition.define(&mut ctx)?;
         top_levels.push(tree::typed::TopLevel::MethodDefinition(md));
     }
 
-    Ok((tree::typed::Program(top_levels), context))
+    Ok((tree::typed::Program(top_levels), ctx))
 }
 
 #[cfg(test)]
@@ -986,7 +1041,7 @@ mod test {
         let program = parser.parse_program().unwrap();
 
         match analyze_program(program) {
-            Ok((_, context)) => println!("{context:?}"),
+            Ok((_, ctx)) => println!("{ctx:?}"),
             Err(e) => eprintln!("{e:?}"),
         }
     }

@@ -31,12 +31,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut parser = parser::Parser::new(lexer);
     let program = parser.parse_program().expect("parse program");
 
-    let (program, _) = match sema::analyze_program(program) {
+    let (program, ctx) = match sema::analyze_program(program) {
         Ok(value) => value,
         Err(e) => panic!("{e:?}"),
     };
 
-    let program = lowering::lower_program(program);
+    let (program, tc) = lowering::lower_program(program, ctx.type_context);
+    println!("{tc:?}");
 
     let value = interp_ir::eval_ir_program(program);
     println!("{value:?}");
