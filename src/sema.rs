@@ -565,6 +565,51 @@ impl Analyze for tree::ast::Expression {
                     r#type: return_type,
                 })
             }
+            tree::ast::Expression::Pipe(initial, calls) => {
+                let initial = initial.analyze(ctx)?;
+
+                let mut current_type = initial.r#type;
+
+                let mut new_calls = vec![];
+
+                for (selector, arguments) in calls {
+                    let selector = selector.selector();
+
+                    let (class_type, types) = expect_class(ctx.type_context.get(current_type))?;
+
+                    let method = ctx.lookup_instance_method(class_type, selector.clone())?;
+                    // TODO: create an instantiate_method function
+                    let method_param_types = method
+                        .param_types
+                        .into_iter()
+                        .map(|t| ctx.instantiate(t, &types))
+                        .collect::<Vec<_>>();
+                    // let method_return_type = method.return_type.instantiate(&types);
+                    let method_return_type = ctx.instantiate(method.return_type, &types);
+
+                    assert!(method_param_types.len() == arguments.len());
+
+                    let arguments = arguments
+                        .into_iter()
+                        .map(|a| a.analyze(ctx))
+                        .collect::<Result<Vec<_>, _>>()?;
+
+                    for (a, b) in arguments.iter().zip(method_param_types.iter()) {
+                        ctx.type_equality(a.r#type, *b)?;
+                    }
+
+                    new_calls.push((selector, arguments));
+
+                    current_type = method_return_type;
+                }
+
+                let pipe = tree::typed::Expression::Pipe(initial, new_calls);
+
+                Ok(Self::Output {
+                    value: Box::new(pipe),
+                    r#type: current_type,
+                })
+            }
             tree::ast::Expression::Assignment(field, new_value) => {
                 let tree::ast::Expression::Variable(name) = l_value(*field)? else {
                     unreachable!()

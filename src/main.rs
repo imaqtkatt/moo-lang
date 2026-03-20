@@ -31,6 +31,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut parser = parser::Parser::new(lexer);
     let program = parser.parse_program().expect("parse program");
 
+    println!("===");
+    println!("{program:?}");
+    println!("===");
+
     let (program, ctx) = match sema::analyze_program(program) {
         Ok(value) => value,
         Err(e) => panic!("{e:?}"),

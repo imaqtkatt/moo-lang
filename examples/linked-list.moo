@@ -32,7 +32,12 @@ class Main
 let class Main main => LinkedList[int]
 def class Main main =>
   let list = new LinkedList[int] head: null in
-  list add-mut: 1,
-       add-mut: 2,
-       add-mut: 3;
-  list
+  list add: 1
+     & add: 2
+     & add: 3
+
+-- or with cascade syntax
+-- list add-mut: 1,
+--      add-mut: 2,
+--      add-mut: 3;
+-- list

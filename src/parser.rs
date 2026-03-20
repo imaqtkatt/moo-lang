@@ -15,8 +15,8 @@ enum Precedence {
     Lowest = 0,
     Seq,
     Assign,
+    Pipe,
     Cascade,
-    // TODO: x bar baz: _ is currently the same as Call(x, barbaz:, _)
     KeywordCall,
     UnaryCall,
     End,
@@ -32,7 +32,15 @@ impl Precedence {
 }
 
 #[derive(Clone, Debug)]
-pub enum ParseError {}
+pub enum ParseError {
+    UnexpectedToken(Token),
+    ExpectedButGot { expected: Token, got: Token },
+
+    ExpectedCall,
+    ExpectedTopLevel,
+    ExpectedIdent,
+    ExpectedKeyword,
+}
 
 type ParseResult<T> = std::result::Result<T, ParseError>;
 
@@ -43,10 +51,15 @@ impl<'a> Parser<'a> {
     }
 
     fn expect(&mut self, expected: Token) -> ParseResult<Token> {
-        if self.peek() == &expected {
+        let peek = self.peek();
+
+        if peek == &expected {
             Ok(self.eat())
         } else {
-            panic!("expected {expected:?} but got {:?}", self.peek())
+            Err(ParseError::ExpectedButGot {
+                expected,
+                got: peek.clone(),
+            })
         }
     }
 
@@ -75,15 +88,14 @@ impl<'a> Parser<'a> {
     fn parse_ident(&mut self) -> ParseResult<String> {
         match self.eat() {
             Token::Ident(i) => Ok(i),
-            x => panic!("parse ident: {x:?}"),
+            _ => Err(ParseError::ExpectedIdent),
         }
     }
 
     fn parse_keyword(&mut self) -> ParseResult<String> {
-        if let Token::Keyword(k) = self.eat() {
-            Ok(k)
-        } else {
-            panic!("parse keyword")
+        match self.eat() {
+            Token::Keyword(k) => Ok(k),
+            _ => Err(ParseError::ExpectedKeyword),
         }
     }
 
@@ -102,7 +114,7 @@ impl<'a> Parser<'a> {
 
                 Ok(ast::Expression::Group(Box::new(e)))
             }
-            x => panic!("parse primary: {x:?}"),
+            token => Err(ParseError::UnexpectedToken(token)),
         }
     }
 
@@ -197,9 +209,11 @@ impl<'a> Parser<'a> {
                     Token::Equal => Self::parse_assign,
                     Token::Comma => Self::parse_cascade,
                     Token::Semicolon => Self::parse_seq,
+                    Token::Ampersand => Self::parse_pipe,
                     Token::Ident(_) => Self::parse_unary_call,
                     Token::Keyword(_) => Self::parse_keyword_call,
-                    t => todo!("todo with {t:?}"),
+                    // t => todo!("todo with {t:?}"),
+                    _ => unreachable!(),
                 };
                 lhs = rule(self, lhs)?;
             } else {
@@ -227,6 +241,7 @@ impl<'a> Parser<'a> {
             Token::LBracket | Token::RBracket => Precedence::End,
             Token::Comma => Precedence::Cascade,
             Token::Semicolon => Precedence::Seq,
+            Token::Ampersand => Precedence::Pipe,
             Token::Equal => Precedence::Assign,
             Token::FatArrow => Precedence::End,
             Token::QuestionMark => Precedence::End,
@@ -255,7 +270,7 @@ impl<'a> Parser<'a> {
             ast::Expression::Call(receiver, selector, arguments) => {
                 (*receiver, vec![(selector, arguments)])
             }
-            x => panic!("parse cascade: {x:?}"),
+            _ => Err(ParseError::ExpectedCall)?,
         };
 
         loop {
@@ -266,7 +281,7 @@ impl<'a> Parser<'a> {
                     messages.push((selector, arguments));
                     receiver = *new_receiver;
                 }
-                _ => panic!("parse cascade"),
+                _ => unreachable!(),
             }
 
             if !self.is(&Token::Comma) {
@@ -283,11 +298,38 @@ impl<'a> Parser<'a> {
         Ok(ast::Expression::Seq(Box::new(lhs), Box::new(rhs)))
     }
 
+    fn parse_pipe(&mut self, lhs: ast::Expression) -> ParseResult<ast::Expression> {
+        let (mut receiver, mut messages) = match lhs {
+            ast::Expression::Call(receiver, selector, arguments) => {
+                (*receiver, vec![(selector, arguments)])
+            }
+            other => (other, vec![]),
+        };
+
+        loop {
+            self.expect(Token::Ampersand)?;
+
+            match self.parse_call(receiver)? {
+                ast::Expression::Call(new_receiver, selector, arguments) => {
+                    messages.push((selector, arguments));
+                    receiver = *new_receiver;
+                }
+                _ => unreachable!(),
+            }
+
+            if !self.is(&Token::Ampersand) {
+                break;
+            }
+        }
+
+        Ok(ast::Expression::Pipe(Box::new(receiver), messages))
+    }
+
     fn parse_call(&mut self, lhs: ast::Expression) -> ParseResult<ast::Expression> {
         match self.peek() {
             Token::Ident(_) => self.parse_unary_call(lhs),
             Token::Keyword(_) => self.parse_keyword_call(lhs),
-            _ => unreachable!(),
+            _ => Err(ParseError::ExpectedCall),
         }
     }
 
@@ -332,7 +374,7 @@ impl<'a> Parser<'a> {
                 self.expect(Token::RParens)?;
                 Ok(t)
             }
-            _ => panic!("primary type"),
+            token => Err(ParseError::UnexpectedToken(token)),
         }
     }
 
@@ -379,7 +421,7 @@ impl<'a> Parser<'a> {
                 .parse_method_let()
                 .map(ast::TopLevel::MethodDeclaration),
             Token::Def => self.parse_method_def().map(ast::TopLevel::MethodDefinition),
-            x => panic!("parse top level: {x:?}"),
+            _ => Err(ParseError::ExpectedTopLevel),
         }
     }
 

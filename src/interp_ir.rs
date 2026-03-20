@@ -119,11 +119,12 @@ fn eval_ir_expr(env: &mut Env, e: &ir::Expr) -> Value {
             fields[*offset].clone()
         }
         ir::Expr::FieldSet(_receiver, _field_id, offset, value) => {
+            let value = eval_ir_expr(env, value);
             let Value::Instance(instance) = env.self_ref() else {
                 unreachable!()
             };
             let mut fields = instance.fields.borrow_mut();
-            fields[*offset] = eval_ir_expr(env, value);
+            fields[*offset] = value;
             Value::Null
         }
         ir::Expr::InstanceCall(receiver, method_id, arguments) => {

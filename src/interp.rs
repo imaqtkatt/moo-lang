@@ -178,6 +178,7 @@ impl Eval for tree::typed::Expression {
 
                 result
             }
+            tree::typed::Expression::Pipe(..) => todo!(),
             tree::typed::Expression::Load(field) => {
                 if let Value::Instance(instance) = &env.self_this {
                     instance.fields.borrow()[&field].clone()

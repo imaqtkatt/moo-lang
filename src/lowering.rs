@@ -208,6 +208,7 @@ fn lower_expr(e: typed::Expression, ctx: &mut Context) -> ir::Expr {
         }
         typed::Expression::Seq(a, b) => lower_seq(ctx, a, b),
         typed::Expression::Cascade(receiver, messages) => lower_cascade(ctx, receiver, messages),
+        typed::Expression::Pipe(initial, messages) => lower_pipe(ctx, initial, messages),
         typed::Expression::Load(name) => lower_load(ctx, name),
         typed::Expression::Store(name, value) => lower_store(ctx, name, value),
         typed::Expression::InstanceCall(receiver, selector, arguments) => {
@@ -338,6 +339,46 @@ fn lower_cascade(
     });
 
     ir::Expr::Let(local_receiver, lowered_receiver, ir::Expression::new(seq))
+}
+
+fn lower_pipe(
+    ctx: &mut Context,
+    initial: typed::Typed<typed::Expression>,
+    calls: Vec<(Selector, Vec<typed::Typed<typed::Expression>>)>,
+) -> ir::Expr {
+    assert!(calls.len() >= 1);
+
+    let crate::sema::Type::Class(curr_class_type, _) = ctx.type_context.get(initial.r#type) else {
+        unreachable!()
+    };
+    let mut curr_class_type = *curr_class_type;
+    let mut curr_class_id = ctx.class_type_to_id[&curr_class_type];
+
+    let mut lowered_calls = std::rc::Rc::unwrap_or_clone(lower_typed_expr(initial, ctx));
+
+    for (selector, arguments) in calls {
+        let method_id = ctx.method_id[&(curr_class_id, selector)];
+        let method = ctx.methods.get(&method_id).unwrap();
+        let method_return_type = method.return_type;
+
+        let lowered_arguments = lower_many(arguments, ctx);
+
+        lowered_calls = ir::Expr::InstanceCall(
+            ir::Expression::new(lowered_calls),
+            method_id,
+            lowered_arguments,
+        );
+
+        let crate::sema::Type::Class(next_class_type, _) = ctx.type_context.get(method_return_type)
+        else {
+            unreachable!()
+        };
+
+        curr_class_type = *next_class_type;
+        curr_class_id = ctx.class_type_to_id[&curr_class_type];
+    }
+
+    lowered_calls
 }
 
 fn lower_load(ctx: &mut Context, name: String) -> ir::Expr {

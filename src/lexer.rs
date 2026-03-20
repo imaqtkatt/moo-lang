@@ -19,6 +19,7 @@ pub enum Token {
 
     Comma,
     Semicolon,
+    Ampersand,
     Equal,
     FatArrow,
     QuestionMark,
@@ -52,7 +53,7 @@ pub struct Lexer<'a> {
 }
 
 fn is_ident(c: &char) -> bool {
-    " \r\n\t()[]=>:;,".find(*c).is_none()
+    " \r\n\t()[]=>:;,&".find(*c).is_none()
 }
 
 impl<'a> Lexer<'a> {
@@ -157,6 +158,7 @@ impl<'a> Lexer<'a> {
                 ']' => Token::RBracket,
                 ',' => Token::Comma,
                 ';' => Token::Semicolon,
+                '&' => Token::Ampersand,
                 '?' => Token::QuestionMark,
                 '\'' => self.string(),
                 '=' if self.consume('>') => Token::FatArrow,
