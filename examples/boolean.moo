@@ -5,6 +5,9 @@ class Boolean inner: bool
 let class Boolean bool: bool => Boolean
 def class Boolean bool: b => new Boolean inner: b
 
+let Boolean unwrap => bool
+def Boolean unwrap => inner
+
 let Boolean negate => Boolean
 def Boolean negate =>
   if inner
@@ -27,8 +30,8 @@ def Boolean or: next =>
 
 class Main
 
-let class Main main => Boolean
+let class Main main => bool
 def class Main main =>
   let p = Boolean bool: true in
   let q = Boolean bool: false in
-  p and: q
+  (p and: q) unwrap

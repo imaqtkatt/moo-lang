@@ -1,5 +1,5 @@
 use crate::{
-    lexer::{Lexer, Token},
+    lexer::{Lexer, Token, TokenType},
     shared::Selector,
     tree::ast,
 };
@@ -34,7 +34,10 @@ impl Precedence {
 #[derive(Clone, Debug)]
 pub enum ParseError {
     UnexpectedToken(Token),
-    ExpectedButGot { expected: Token, got: Token },
+    ExpectedButGot {
+        expected: crate::lexer::TokenType,
+        got: Token,
+    },
 
     ExpectedCall,
     ExpectedTopLevel,
@@ -50,22 +53,20 @@ impl<'a> Parser<'a> {
         Self { lexer, current }
     }
 
-    fn expect(&mut self, expected: Token) -> ParseResult<Token> {
-        let peek = self.peek();
-
-        if peek == &expected {
+    fn expect(&mut self, expected: crate::lexer::TokenType) -> ParseResult<Token> {
+        if self.peek() == expected {
             Ok(self.eat())
         } else {
             Err(ParseError::ExpectedButGot {
                 expected,
-                got: peek.clone(),
+                got: self.current,
             })
         }
     }
 
     #[allow(unused)]
-    fn consume(&mut self, token: &Token) -> bool {
-        if self.peek() == token {
+    fn consume(&mut self, token_type: crate::lexer::TokenType) -> bool {
+        if self.peek() == token_type {
             self.eat();
             true
         } else {
@@ -77,62 +78,85 @@ impl<'a> Parser<'a> {
         std::mem::replace(&mut self.current, self.lexer.next_token())
     }
 
-    fn peek(&self) -> &crate::lexer::Token {
-        &self.current
+    fn peek(&self) -> crate::lexer::TokenType {
+        self.current.token_type
     }
 
-    fn is(&self, token: &Token) -> bool {
-        self.peek() == token
+    fn is(&self, token_type: crate::lexer::TokenType) -> bool {
+        self.peek() == token_type
+    }
+
+    fn just<T>(&mut self, value: T) -> ParseResult<T> {
+        self.eat();
+        Ok(value)
     }
 
     fn parse_ident(&mut self) -> ParseResult<String> {
-        match self.eat() {
-            Token::Ident(i) => Ok(i),
+        let token = self.eat();
+        match token.token_type {
+            TokenType::Ident => {
+                let lexeme = self.lexer.lexeme(token);
+                // println!("lexeme = {lexeme:?}");
+                Ok(String::from(lexeme))
+            }
             _ => Err(ParseError::ExpectedIdent),
         }
     }
 
     fn parse_keyword(&mut self) -> ParseResult<String> {
-        match self.eat() {
-            Token::Keyword(k) => Ok(k),
+        let token = self.eat();
+        match token.token_type {
+            TokenType::Keyword => {
+                let lexeme = self.lexer.lexeme(token);
+                Ok(String::from(lexeme))
+            }
             _ => Err(ParseError::ExpectedKeyword),
         }
     }
 
     fn parse_primary(&mut self) -> ParseResult<ast::Expression> {
-        match self.eat() {
-            Token::Ident(i) => Ok(ast::Expression::Variable(i)),
-            Token::Number(n) => Ok(ast::Expression::Constant(ast::Constant::Integer(n))),
-            Token::String(s) => Ok(ast::Expression::Constant(ast::Constant::String(s))),
-            Token::True => Ok(ast::Expression::Constant(ast::Constant::Boolean(true))),
-            Token::False => Ok(ast::Expression::Constant(ast::Constant::Boolean(false))),
-            Token::Null => Ok(ast::Expression::Constant(ast::Constant::Null)),
-            Token::TSelf => Ok(ast::Expression::SelfRef),
-            Token::LParens => {
+        match self.peek() {
+            TokenType::Ident => self.parse_ident().map(|i| ast::Expression::Variable(i)),
+            TokenType::Number => Ok(ast::Expression::Constant(ast::Constant::Integer({
+                let token = self.eat();
+                let lexeme = self.lexer.lexeme(token);
+                lexeme.parse().unwrap()
+            }))),
+            TokenType::String => Ok(ast::Expression::Constant(ast::Constant::String({
+                let token = self.eat();
+                let lexeme = self.lexer.lexeme(token);
+                String::from(lexeme)
+            }))),
+            TokenType::True => self.just(ast::Expression::Constant(ast::Constant::Boolean(true))),
+            TokenType::False => self.just(ast::Expression::Constant(ast::Constant::Boolean(false))),
+            TokenType::Null => self.just(ast::Expression::Constant(ast::Constant::Null)),
+            TokenType::SelfRef => self.just(ast::Expression::SelfRef),
+            TokenType::LParens => {
+                self.expect(TokenType::LParens)?;
                 let e = self.parse_expression()?;
-                self.expect(Token::RParens)?;
+                self.expect(TokenType::RParens)?;
 
                 Ok(ast::Expression::Group(Box::new(e)))
             }
-            token => Err(ParseError::UnexpectedToken(token)),
+            _ => Err(ParseError::UnexpectedToken(self.current)),
         }
     }
 
     fn parse_expression(&mut self) -> ParseResult<ast::Expression> {
         match self.peek() {
-            Token::Let => self.parse_let_in(),
-            Token::New => self.parse_new(),
-            Token::If => self.parse_if(),
+            TokenType::Let => self.parse_let_in(),
+            TokenType::New => self.parse_new(),
+            TokenType::If => self.parse_if(),
             _ => self.parse_infix(Precedence::Lowest),
         }
     }
 
     fn parse_let_in(&mut self) -> ParseResult<ast::Expression> {
-        self.expect(Token::Let)?;
+        self.expect(TokenType::Let)?;
         let ident = self.parse_ident()?;
-        self.expect(Token::Equal)?;
+        self.expect(TokenType::Equal)?;
         let value = self.parse_expression()?;
-        self.expect(Token::In)?;
+        self.expect(TokenType::In)?;
         let next = self.parse_expression()?;
 
         Ok(ast::Expression::LetIn(
@@ -143,13 +167,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_new(&mut self) -> ParseResult<ast::Expression> {
-        self.expect(Token::New)?;
+        self.expect(TokenType::New)?;
         let class_name = self.parse_ident()?;
         let generics = self.parse_generics(|p| p.parse_type())?;
 
         let mut field_init = Vec::new();
 
-        while let Token::Keyword(_) = self.peek() {
+        while let TokenType::Keyword = self.peek() {
             let keyword = self.parse_keyword()?;
             let parameter = self.parse_infix(Precedence::KeywordCall.left())?;
 
@@ -162,20 +186,20 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_if(&mut self) -> ParseResult<ast::Expression> {
-        self.expect(Token::If)?;
+        self.expect(TokenType::If)?;
 
-        if self.consume(&Token::Let) {
+        if self.consume(TokenType::Let) {
             let nullable = self.parse_expression()?;
 
-            let refined = if self.consume(&Token::As) {
+            let refined = if self.consume(TokenType::As) {
                 Some(self.parse_ident()?)
             } else {
                 None
             };
 
-            self.expect(Token::Then)?;
+            self.expect(TokenType::Then)?;
             let consequence = self.parse_expression()?;
-            self.expect(Token::Else)?;
+            self.expect(TokenType::Else)?;
             let alternative = self.parse_expression()?;
 
             Ok(ast::Expression::IfLetThenElse(
@@ -186,9 +210,9 @@ impl<'a> Parser<'a> {
             ))
         } else {
             let condition = self.parse_expression()?;
-            self.expect(Token::Then)?;
+            self.expect(TokenType::Then)?;
             let consequence = self.parse_expression()?;
-            self.expect(Token::Else)?;
+            self.expect(TokenType::Else)?;
             let alternative = self.parse_expression()?;
 
             Ok(ast::Expression::IfThenElse(
@@ -206,13 +230,12 @@ impl<'a> Parser<'a> {
             let p = self.precedence();
             if p >= precedence && p != Precedence::End {
                 let rule = match self.peek() {
-                    Token::Equal => Self::parse_assign,
-                    Token::Comma => Self::parse_cascade,
-                    Token::Semicolon => Self::parse_seq,
-                    Token::Ampersand => Self::parse_pipe,
-                    Token::Ident(_) => Self::parse_unary_call,
-                    Token::Keyword(_) => Self::parse_keyword_call,
-                    // t => todo!("todo with {t:?}"),
+                    TokenType::Equal => Self::parse_assign,
+                    TokenType::Comma => Self::parse_cascade,
+                    TokenType::Semicolon => Self::parse_seq,
+                    TokenType::Ampersand => Self::parse_pipe,
+                    TokenType::Ident => Self::parse_unary_call,
+                    TokenType::Keyword => Self::parse_keyword_call,
                     _ => unreachable!(),
                 };
                 lhs = rule(self, lhs)?;
@@ -226,41 +249,41 @@ impl<'a> Parser<'a> {
 
     fn precedence(&self) -> Precedence {
         match self.peek() {
-            Token::Number(_) => Precedence::End,
-            Token::String(_) => Precedence::End,
-            Token::True => Precedence::End,
-            Token::False => Precedence::End,
-            Token::Null => Precedence::End,
-            Token::TSelf => Precedence::End,
+            TokenType::Number => Precedence::End,
+            TokenType::String => Precedence::End,
+            TokenType::True => Precedence::End,
+            TokenType::False => Precedence::End,
+            TokenType::Null => Precedence::End,
+            TokenType::SelfRef => Precedence::End,
             //
-            Token::Ident(_) => Precedence::UnaryCall,
-            Token::Keyword(_) => Precedence::KeywordCall,
-            Token::LParens => Precedence::UnaryCall,
+            TokenType::Ident => Precedence::UnaryCall,
+            TokenType::Keyword => Precedence::KeywordCall,
+            TokenType::LParens => Precedence::UnaryCall,
             //
-            Token::RParens => Precedence::End,
-            Token::LBracket | Token::RBracket => Precedence::End,
-            Token::Comma => Precedence::Cascade,
-            Token::Semicolon => Precedence::Seq,
-            Token::Ampersand => Precedence::Pipe,
-            Token::Equal => Precedence::Assign,
-            Token::FatArrow => Precedence::End,
-            Token::QuestionMark => Precedence::End,
-            Token::TypeInt => Precedence::End,
-            Token::TypeBool => Precedence::End,
-            Token::TypeStr => Precedence::End,
-            Token::TypeVoid => Precedence::End,
-            Token::Class => Precedence::End,
-            Token::New => Precedence::End,
-            Token::If | Token::Then | Token::Else => Precedence::End,
-            Token::Let | Token::As | Token::In => Precedence::End,
-            Token::Def => Precedence::End,
-            Token::ErrorChar(_) | Token::ErrorString(_) => Precedence::End,
-            Token::Eof => Precedence::End,
+            TokenType::RParens => Precedence::End,
+            TokenType::LBracket | TokenType::RBracket => Precedence::End,
+            TokenType::Comma => Precedence::Cascade,
+            TokenType::Semicolon => Precedence::Seq,
+            TokenType::Ampersand => Precedence::Pipe,
+            TokenType::Equal => Precedence::Assign,
+            TokenType::FatArrow => Precedence::End,
+            TokenType::QuestionMark => Precedence::End,
+            TokenType::TypeInt => Precedence::End,
+            TokenType::TypeBool => Precedence::End,
+            TokenType::TypeStr => Precedence::End,
+            TokenType::TypeVoid => Precedence::End,
+            TokenType::Class => Precedence::End,
+            TokenType::New => Precedence::End,
+            TokenType::If | TokenType::Then | TokenType::Else => Precedence::End,
+            TokenType::Let | TokenType::As | TokenType::In => Precedence::End,
+            TokenType::Def => Precedence::End,
+            TokenType::Error => Precedence::End,
+            TokenType::Eof => Precedence::End,
         }
     }
 
     fn parse_assign(&mut self, lhs: ast::Expression) -> ParseResult<ast::Expression> {
-        self.expect(Token::Equal)?;
+        self.expect(TokenType::Equal)?;
         let rhs = self.parse_infix(Precedence::Assign.left())?;
         Ok(ast::Expression::Assignment(Box::new(lhs), Box::new(rhs)))
     }
@@ -274,7 +297,7 @@ impl<'a> Parser<'a> {
         };
 
         loop {
-            self.expect(Token::Comma)?;
+            self.expect(TokenType::Comma)?;
 
             match self.parse_call(receiver)? {
                 ast::Expression::Call(new_receiver, selector, arguments) => {
@@ -284,7 +307,7 @@ impl<'a> Parser<'a> {
                 _ => unreachable!(),
             }
 
-            if !self.is(&Token::Comma) {
+            if !self.is(TokenType::Comma) {
                 break;
             }
         }
@@ -293,7 +316,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_seq(&mut self, lhs: ast::Expression) -> ParseResult<ast::Expression> {
-        self.expect(Token::Semicolon)?;
+        self.expect(TokenType::Semicolon)?;
         let rhs = self.parse_infix(Precedence::Seq.left())?;
         Ok(ast::Expression::Seq(Box::new(lhs), Box::new(rhs)))
     }
@@ -307,7 +330,7 @@ impl<'a> Parser<'a> {
         };
 
         loop {
-            self.expect(Token::Ampersand)?;
+            self.expect(TokenType::Ampersand)?;
 
             match self.parse_call(receiver)? {
                 ast::Expression::Call(new_receiver, selector, arguments) => {
@@ -317,7 +340,7 @@ impl<'a> Parser<'a> {
                 _ => unreachable!(),
             }
 
-            if !self.is(&Token::Ampersand) {
+            if !self.is(TokenType::Ampersand) {
                 break;
             }
         }
@@ -327,8 +350,8 @@ impl<'a> Parser<'a> {
 
     fn parse_call(&mut self, lhs: ast::Expression) -> ParseResult<ast::Expression> {
         match self.peek() {
-            Token::Ident(_) => self.parse_unary_call(lhs),
-            Token::Keyword(_) => self.parse_keyword_call(lhs),
+            TokenType::Ident => self.parse_unary_call(lhs),
+            TokenType::Keyword => self.parse_keyword_call(lhs),
             _ => Err(ParseError::ExpectedCall),
         }
     }
@@ -363,35 +386,37 @@ impl<'a> Parser<'a> {
 
 impl<'a> Parser<'a> {
     fn parse_primary_type(&mut self) -> ParseResult<ast::Type> {
-        match self.eat() {
-            Token::Ident(i) => self.parse_generic_type(i),
-            Token::TypeVoid => Ok(ast::Type::Void),
-            Token::TypeInt => Ok(ast::Type::Int),
-            Token::TypeBool => Ok(ast::Type::Bool),
-            Token::TypeStr => Ok(ast::Type::Str),
-            Token::LParens => {
+        match self.peek() {
+            TokenType::Ident => self.parse_generic_type(),
+            TokenType::TypeVoid => self.just(ast::Type::Void),
+            TokenType::TypeInt => self.just(ast::Type::Int),
+            TokenType::TypeBool => self.just(ast::Type::Bool),
+            TokenType::TypeStr => self.just(ast::Type::Str),
+            TokenType::LParens => {
+                self.expect(TokenType::LParens)?;
                 let t = self.parse_type()?;
-                self.expect(Token::RParens)?;
+                self.expect(TokenType::RParens)?;
                 Ok(t)
             }
-            token => Err(ParseError::UnexpectedToken(token)),
+            _ => Err(ParseError::UnexpectedToken(self.current)),
         }
     }
 
     fn parse_type(&mut self) -> ParseResult<ast::Type> {
         match self.peek() {
-            Token::QuestionMark => self.parse_nullable_type(),
+            TokenType::QuestionMark => self.parse_nullable_type(),
             _ => self.parse_primary_type(),
         }
     }
 
     fn parse_nullable_type(&mut self) -> ParseResult<ast::Type> {
-        self.expect(Token::QuestionMark)?;
+        self.expect(TokenType::QuestionMark)?;
         let t = self.parse_type()?;
         Ok(ast::Type::Nullable(Box::new(t)))
     }
 
-    fn parse_generic_type(&mut self, named: String) -> ParseResult<ast::Type> {
+    fn parse_generic_type(&mut self) -> ParseResult<ast::Type> {
+        let named = self.parse_ident()?;
         let types = self.parse_generics(|p| p.parse_type())?;
 
         Ok(ast::Type::Named(named, types))
@@ -403,7 +428,7 @@ impl<'a> Parser<'a> {
         let mut top_levels = Vec::new();
 
         loop {
-            if self.peek() == &Token::Eof {
+            if self.is(TokenType::Eof) {
                 break;
             }
 
@@ -416,24 +441,24 @@ impl<'a> Parser<'a> {
 
     fn parse_top_level(&mut self) -> ParseResult<ast::TopLevel> {
         match self.peek() {
-            Token::Class => self.parse_class().map(ast::TopLevel::ClassDefinition),
-            Token::Let => self
+            TokenType::Class => self.parse_class().map(ast::TopLevel::ClassDefinition),
+            TokenType::Let => self
                 .parse_method_let()
                 .map(ast::TopLevel::MethodDeclaration),
-            Token::Def => self.parse_method_def().map(ast::TopLevel::MethodDefinition),
+            TokenType::Def => self.parse_method_def().map(ast::TopLevel::MethodDefinition),
             _ => Err(ParseError::ExpectedTopLevel),
         }
     }
 
     fn parse_class(&mut self) -> ParseResult<ast::ClassDefinition> {
-        self.expect(Token::Class)?;
+        self.expect(TokenType::Class)?;
         let class_name = self.parse_ident()?;
 
         let generics = self.parse_generics(|p| p.parse_ident())?;
 
         let mut fields = vec![];
 
-        while let Token::Keyword(_) = self.peek() {
+        while let TokenType::Keyword = self.peek() {
             let field_name = self.parse_keyword()?;
             let field_type = self.parse_type()?;
 
@@ -448,8 +473,8 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_method_type(&mut self) -> ParseResult<ast::MethodType> {
-        if let Token::Class = self.peek() {
-            self.expect(Token::Class)?;
+        if let TokenType::Class = self.peek() {
+            self.expect(TokenType::Class)?;
             Ok(ast::MethodType::Class)
         } else {
             Ok(ast::MethodType::Instance)
@@ -462,23 +487,23 @@ impl<'a> Parser<'a> {
     ) -> ParseResult<Vec<T>> {
         let mut generics = vec![];
 
-        if self.consume(&Token::LBracket) {
-            while !self.is(&Token::RBracket) {
+        if self.consume(TokenType::LBracket) {
+            while !self.is(TokenType::RBracket) {
                 generics.push(f(self)?);
-                if self.consume(&Token::Comma) {
+                if self.consume(TokenType::Comma) {
                     continue;
                 } else {
                     break;
                 }
             }
-            self.expect(Token::RBracket)?;
+            self.expect(TokenType::RBracket)?;
         }
 
         Ok(generics)
     }
 
     fn parse_method_let(&mut self) -> ParseResult<ast::MethodDeclaration> {
-        self.expect(Token::Let)?;
+        self.expect(TokenType::Let)?;
         let method_type = self.parse_method_type()?;
 
         let class_name = self.parse_ident()?;
@@ -486,8 +511,8 @@ impl<'a> Parser<'a> {
         let mut selector = Selector::new();
         let mut parameters = Vec::new();
 
-        if let Token::Keyword(_) = self.peek() {
-            while let Token::Keyword(_) = self.peek() {
+        if let TokenType::Keyword = self.peek() {
+            while let TokenType::Keyword = self.peek() {
                 let parameter = self.parse_keyword()?;
                 let parameter_type = self.parse_type()?;
 
@@ -499,7 +524,7 @@ impl<'a> Parser<'a> {
             selector = Selector::unary(&unary);
         }
 
-        self.expect(Token::FatArrow)?;
+        self.expect(TokenType::FatArrow)?;
 
         let return_type = self.parse_type()?;
 
@@ -513,7 +538,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_method_def(&mut self) -> ParseResult<ast::MethodDefinition> {
-        self.expect(Token::Def)?;
+        self.expect(TokenType::Def)?;
         let method_type = self.parse_method_type()?;
 
         let class_name = self.parse_ident()?;
@@ -521,8 +546,8 @@ impl<'a> Parser<'a> {
         let mut selector = Selector::new();
         let mut parameters = Vec::new();
 
-        if let Token::Keyword(_) = self.peek() {
-            while let Token::Keyword(_) = self.peek() {
+        if let TokenType::Keyword = self.peek() {
+            while let TokenType::Keyword = self.peek() {
                 let keyword = self.parse_keyword()?;
                 let parameter = self.parse_ident()?;
 
@@ -534,7 +559,7 @@ impl<'a> Parser<'a> {
             selector = Selector::unary(&unary);
         }
 
-        self.expect(Token::FatArrow)?;
+        self.expect(TokenType::FatArrow)?;
 
         let body = self.parse_expression()?;
 

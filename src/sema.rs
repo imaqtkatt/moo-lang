@@ -410,6 +410,7 @@ impl Analyze for tree::ast::Expression {
                 })
             }
             tree::ast::Expression::LetIn(bind, value, next) => {
+                let value = r_value(*value)?;
                 let value = value.analyze(ctx)?;
 
                 let next =
@@ -444,7 +445,7 @@ impl Analyze for tree::ast::Expression {
             tree::ast::Expression::IfLetThenElse(nullable, refined, consequence, alternative) => {
                 if let tree::ast::Expression::Variable(name) = *nullable {
                     let (bind, t) = ctx.lookup_local(&name)?;
-                    let inner = expect_nullable(ctx.type_context.get(t))?;
+                    let inner = nullable_type(ctx.type_context.get(t))?;
 
                     if refined.is_some() {
                         todo!("alias on variable")
@@ -479,8 +480,9 @@ impl Analyze for tree::ast::Expression {
                         r#type: branch_type,
                     })
                 } else {
+                    let nullable = r_value(*nullable)?;
                     let nullable = nullable.analyze(ctx)?;
-                    let inner = expect_nullable(ctx.type_context.get(nullable.r#type))?;
+                    let inner = nullable_type(ctx.type_context.get(nullable.r#type))?;
 
                     let consequence = if let Some(name) = &refined {
                         ctx.scope(name, (Bind::Local, inner), |ctx| consequence.analyze(ctx))?
@@ -524,7 +526,7 @@ impl Analyze for tree::ast::Expression {
                 assert!(!messages.is_empty());
 
                 let receiver = receiver.analyze(ctx)?;
-                let (class_type, types) = expect_class(ctx.type_context.get(receiver.r#type))?;
+                let (class_type, types) = class_type(ctx.type_context.get(receiver.r#type))?;
 
                 let mut new_messages = vec![];
                 let mut return_type = VOID_TYPE;
@@ -575,7 +577,7 @@ impl Analyze for tree::ast::Expression {
                 for (selector, arguments) in calls {
                     let selector = selector.selector();
 
-                    let (class_type, types) = expect_class(ctx.type_context.get(current_type))?;
+                    let (class_type, types) = class_type(ctx.type_context.get(current_type))?;
 
                     let method = ctx.lookup_instance_method(class_type, selector.clone())?;
                     // TODO: create an instantiate_method function
@@ -659,7 +661,7 @@ impl Analyze for tree::ast::Expression {
                     })
                 } else {
                     let receiver = receiver.analyze(ctx)?;
-                    let (class_type, types) = expect_class(ctx.type_context.get(receiver.r#type))?;
+                    let (class_type, types) = class_type(ctx.type_context.get(receiver.r#type))?;
                     println!("class_type = {class_type:?} with {types:?}");
 
                     let method = ctx.lookup_instance_method(class_type, selector.clone())?;
@@ -743,7 +745,25 @@ fn l_value(tree: tree::ast::Expression) -> Result<tree::ast::Expression, Analysi
     }
 }
 
-fn expect_class(a: &Type) -> Result<(ClassType, Vec<TypeId>), AnalysisError> {
+fn r_value(tree: tree::ast::Expression) -> Result<tree::ast::Expression, AnalysisError> {
+    match &tree {
+        tree::ast::Expression::Assignment(..) => todo!("error"),
+        tree::ast::Expression::Variable(..)
+        | tree::ast::Expression::Constant(..)
+        | tree::ast::Expression::SelfRef
+        | tree::ast::Expression::LetIn(..)
+        | tree::ast::Expression::IfThenElse(..)
+        | tree::ast::Expression::IfLetThenElse(..)
+        | tree::ast::Expression::Seq(..)
+        | tree::ast::Expression::Cascade(..)
+        | tree::ast::Expression::Pipe(..)
+        | tree::ast::Expression::Call(..)
+        | tree::ast::Expression::Instantiate(..)
+        | tree::ast::Expression::Group(..) => Ok(tree),
+    }
+}
+
+fn class_type(a: &Type) -> Result<(ClassType, Vec<TypeId>), AnalysisError> {
     if let Type::Class(class_type, types) = a {
         Ok((*class_type, types.clone()))
     } else {
@@ -751,7 +771,7 @@ fn expect_class(a: &Type) -> Result<(ClassType, Vec<TypeId>), AnalysisError> {
     }
 }
 
-fn expect_nullable(t: &Type) -> Result<TypeId, AnalysisError> {
+fn nullable_type(t: &Type) -> Result<TypeId, AnalysisError> {
     if let Type::Nullable(inner) = t {
         Ok(*inner)
     } else {
@@ -777,6 +797,7 @@ impl Analyze for tree::ast::Type {
                 }
 
                 let class = ctx.lookup_class(&name)?;
+                assert!(class.generics.len() == args.len());
 
                 // println!("args = {args:?}");
 

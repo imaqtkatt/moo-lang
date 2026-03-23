@@ -346,7 +346,7 @@ fn lower_pipe(
     initial: typed::Typed<typed::Expression>,
     calls: Vec<(Selector, Vec<typed::Typed<typed::Expression>>)>,
 ) -> ir::Expr {
-    assert!(calls.len() >= 1);
+    assert!(!calls.is_empty());
 
     let crate::sema::Type::Class(curr_class_type, _) = ctx.type_context.get(initial.r#type) else {
         unreachable!()

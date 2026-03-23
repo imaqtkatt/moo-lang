@@ -1,16 +1,16 @@
 use std::{iter::Peekable, str::Chars};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Token {
-    Ident(String),
-    Number(i32),
-    String(String),
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TokenType {
+    Ident,
+    Number,
+    String,
     True,
     False,
     Null,
-    TSelf,
+    SelfRef,
 
-    Keyword(String),
+    Keyword,
 
     LParens,
     RParens,
@@ -22,8 +22,8 @@ pub enum Token {
     Ampersand,
     Equal,
     FatArrow,
-    QuestionMark,
 
+    QuestionMark,
     TypeInt,
     TypeBool,
     TypeStr,
@@ -39,9 +39,15 @@ pub enum Token {
     In,
     Def,
 
-    ErrorChar(char),
-    ErrorString(String),
+    Error,
     Eof,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Token {
+    pub token_type: TokenType,
+    pub start: usize,
+    pub end: usize,
 }
 
 pub struct Lexer<'a> {
@@ -52,8 +58,14 @@ pub struct Lexer<'a> {
     peekable: Peekable<Chars<'a>>,
 }
 
+// TODO: revise idents
 fn is_ident(c: &char) -> bool {
     " \r\n\t()[]=>:;,&".find(*c).is_none()
+}
+
+fn is_ident_end(c: &char) -> bool {
+    const IDENT_END: &'static str = "!?";
+    todo!()
 }
 
 impl<'a> Lexer<'a> {
@@ -128,6 +140,22 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    const fn token(&self, token_type: TokenType) -> Token {
+        Token {
+            token_type,
+            start: self.start,
+            end: self.index,
+        }
+    }
+
+    const fn keyword(&self) -> Token {
+        Token {
+            token_type: TokenType::Keyword,
+            start: self.start,
+            end: self.index - 1,
+        }
+    }
+
     fn string(&mut self) -> Token {
         self.save();
         let mut buf = String::with_capacity(16);
@@ -136,13 +164,17 @@ impl<'a> Lexer<'a> {
             match self.peekable.peek() {
                 Some('\'') => break,
                 Some(_) => buf.push(self.next_char().unwrap()),
-                None => return Token::ErrorString(buf),
+                None => return self.token(TokenType::Error),
             }
         }
 
         self.consume('\'');
 
-        Token::String(buf)
+        Token {
+            token_type: TokenType::String,
+            start: self.start,
+            end: self.index - 1,
+        }
     }
 
     pub fn next_token(&mut self) -> Token {
@@ -150,63 +182,77 @@ impl<'a> Lexer<'a> {
         self.skip();
         self.save();
 
-        if let Some(c) = self.next_char() {
+        let token_type = if let Some(c) = self.next_char() {
             match c {
-                '(' => Token::LParens,
-                ')' => Token::RParens,
-                '[' => Token::LBracket,
-                ']' => Token::RBracket,
-                ',' => Token::Comma,
-                ';' => Token::Semicolon,
-                '&' => Token::Ampersand,
-                '?' => Token::QuestionMark,
-                '\'' => self.string(),
-                '=' if self.consume('>') => Token::FatArrow,
-                '=' => Token::Equal,
+                '(' => TokenType::LParens,
+                ')' => TokenType::RParens,
+                '[' => TokenType::LBracket,
+                ']' => TokenType::RBracket,
+                ',' => TokenType::Comma,
+                ';' => TokenType::Semicolon,
+                '&' => TokenType::Ampersand,
+                '?' => TokenType::QuestionMark,
+                '\'' => return self.string(),
+                '=' if self.consume('>') => TokenType::FatArrow,
+                '=' => TokenType::Equal,
                 '-' => todo!(),
                 c if c.is_ascii_digit() => {
                     self.skip_while(char::is_ascii_digit);
 
-                    let lexeme = String::from(&self.source[self.start..self.index]);
-                    Token::Number(lexeme.parse().unwrap())
+                    // let lexeme = String::from(&self.source[self.start..self.index]);
+                    TokenType::Number
                 }
                 c if c.is_ascii_alphanumeric() => {
                     self.skip_while(is_ident);
                     let lexeme = String::from(&self.source[self.start..self.index]);
                     if self.consume(':') {
-                        Token::Keyword(lexeme)
+                        return self.keyword();
                     } else {
                         self.ident(lexeme)
                     }
                 }
-                c => Token::ErrorChar(c),
+                _ => TokenType::Error,
             }
         } else {
-            Token::Eof
-        }
+            TokenType::Eof
+        };
+
+        self.token(token_type)
     }
 
-    fn ident(&self, lexeme: String) -> Token {
+    fn ident(&self, lexeme: String) -> TokenType {
         match lexeme.as_str() {
-            "let" => Token::Let,
-            "in" => Token::In,
-            "def" => Token::Def,
-            "class" => Token::Class,
-            "new" => Token::New,
-            "if" => Token::If,
-            "as" => Token::As,
-            "then" => Token::Then,
-            "else" => Token::Else,
-            "true" => Token::True,
-            "false" => Token::False,
-            "null" => Token::Null,
-            "self" => Token::TSelf,
-            "int" => Token::TypeInt,
-            "bool" => Token::TypeBool,
-            "str" => Token::TypeStr,
-            "void" => Token::TypeVoid,
-            _ => Token::Ident(lexeme),
+            "let" => TokenType::Let,
+            "in" => TokenType::In,
+            "def" => TokenType::Def,
+            "class" => TokenType::Class,
+            "new" => TokenType::New,
+            "if" => TokenType::If,
+            "as" => TokenType::As,
+            "then" => TokenType::Then,
+            "else" => TokenType::Else,
+            "true" => TokenType::True,
+            "false" => TokenType::False,
+            "null" => TokenType::Null,
+            "self" => TokenType::SelfRef,
+            "int" => TokenType::TypeInt,
+            "bool" => TokenType::TypeBool,
+            "str" => TokenType::TypeStr,
+            "void" => TokenType::TypeVoid,
+            _ => TokenType::Ident,
         }
+    }
+}
+
+impl Token {
+    pub fn lexeme<'a>(&self, source: &'a str) -> &'a str {
+        &source[self.start..self.end]
+    }
+}
+
+impl<'a> Lexer<'a> {
+    pub fn lexeme(&self, token: Token) -> &'a str {
+        token.lexeme(self.source)
     }
 }
 
