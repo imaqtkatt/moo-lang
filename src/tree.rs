@@ -48,7 +48,6 @@ pub mod ast {
 
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub enum Type {
-        Void,
         Int,
         Bool,
         Str,
@@ -70,7 +69,7 @@ pub mod ast {
         pub receiver: String,
         pub selector: Selector,
         pub parameters: Vec<Type>,
-        pub body: Type,
+        pub body: Option<Type>,
     }
 
     #[derive(Clone, Debug)]

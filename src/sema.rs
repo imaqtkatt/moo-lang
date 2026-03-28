@@ -779,12 +779,20 @@ fn nullable_type(t: &Type) -> Result<TypeId, AnalysisError> {
     }
 }
 
+impl Analyze for Option<tree::ast::Type> {
+    type Output = TypeId;
+
+    fn analyze(self, ctx: &mut Context) -> Result<Self::Output, AnalysisError> {
+        self.map(|t| t.analyze(ctx))
+            .unwrap_or_else(|| Ok(VOID_TYPE))
+    }
+}
+
 impl Analyze for tree::ast::Type {
     type Output = TypeId;
 
     fn analyze(self, ctx: &mut Context) -> Result<Self::Output, AnalysisError> {
         let analyzed = match self {
-            tree::ast::Type::Void => VOID_TYPE,
             tree::ast::Type::Int => INT_TYPE,
             tree::ast::Type::Bool => BOOL_TYPE,
             tree::ast::Type::Str => STR_TYPE,

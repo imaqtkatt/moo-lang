@@ -116,7 +116,7 @@ impl<'a> Parser<'a> {
 
     fn parse_primary(&mut self) -> ParseResult<ast::Expression> {
         match self.peek() {
-            TokenType::Ident => self.parse_ident().map(|i| ast::Expression::Variable(i)),
+            TokenType::Ident => self.parse_ident().map(ast::Expression::Variable),
             TokenType::Number => Ok(ast::Expression::Constant(ast::Constant::Integer({
                 let token = self.eat();
                 let lexeme = self.lexer.lexeme(token);
@@ -388,7 +388,7 @@ impl<'a> Parser<'a> {
     fn parse_primary_type(&mut self) -> ParseResult<ast::Type> {
         match self.peek() {
             TokenType::Ident => self.parse_generic_type(),
-            TokenType::TypeVoid => self.just(ast::Type::Void),
+            // TokenType::TypeVoid => self.just(ast::Type::Void),
             TokenType::TypeInt => self.just(ast::Type::Int),
             TokenType::TypeBool => self.just(ast::Type::Bool),
             TokenType::TypeStr => self.just(ast::Type::Str),
@@ -524,9 +524,13 @@ impl<'a> Parser<'a> {
             selector = Selector::unary(&unary);
         }
 
-        self.expect(TokenType::FatArrow)?;
-
-        let return_type = self.parse_type()?;
+        let return_type = if self.is(TokenType::FatArrow) {
+            self.expect(TokenType::FatArrow)?;
+            let return_type = self.parse_type()?;
+            Some(return_type)
+        } else {
+            None
+        };
 
         Ok(ast::MethodDeclaration {
             method_type,
