@@ -7,7 +7,7 @@ impl Selector {
     }
 
     pub fn unary(op: &str) -> Self {
-        Self(String::from(op))
+        Self(op.to_string())
     }
 
     pub fn push(&self, keyword: &str) -> Self {
@@ -15,5 +15,11 @@ impl Selector {
         selector.0.push_str(keyword);
         selector.0.push(':');
         selector
+    }
+}
+
+impl std::fmt::Display for Selector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
     }
 }

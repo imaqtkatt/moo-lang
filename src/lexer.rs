@@ -17,6 +17,7 @@ pub enum TokenType {
     LBracket,
     RBracket,
 
+    At,
     Comma,
     Semicolon,
     Ampersand,
@@ -63,6 +64,7 @@ fn is_ident(c: &char) -> bool {
     " \r\n\t()[]=>:;,&".find(*c).is_none()
 }
 
+#[allow(unused)]
 fn is_ident_end(c: &char) -> bool {
     const IDENT_END: &'static str = "!?";
     todo!()
@@ -182,39 +184,42 @@ impl<'a> Lexer<'a> {
         self.skip();
         self.save();
 
-        let token_type = if let Some(c) = self.next_char() {
-            match c {
-                '(' => TokenType::LParens,
-                ')' => TokenType::RParens,
-                '[' => TokenType::LBracket,
-                ']' => TokenType::RBracket,
-                ',' => TokenType::Comma,
-                ';' => TokenType::Semicolon,
-                '&' => TokenType::Ampersand,
-                '?' => TokenType::QuestionMark,
-                '\'' => return self.string(),
-                '=' if self.consume('>') => TokenType::FatArrow,
-                '=' => TokenType::Equal,
-                '-' => todo!(),
-                c if c.is_ascii_digit() => {
-                    self.skip_while(char::is_ascii_digit);
+        let next_char = self.next_char();
 
-                    // let lexeme = String::from(&self.source[self.start..self.index]);
-                    TokenType::Number
-                }
-                c if c.is_ascii_alphanumeric() => {
-                    self.skip_while(is_ident);
-                    let lexeme = String::from(&self.source[self.start..self.index]);
-                    if self.consume(':') {
-                        return self.keyword();
-                    } else {
-                        self.ident(lexeme)
-                    }
-                }
-                _ => TokenType::Error,
+        if next_char.is_none() {
+            return self.token(TokenType::Eof);
+        }
+
+        let token_type = match next_char.unwrap() {
+            '(' => TokenType::LParens,
+            ')' => TokenType::RParens,
+            '[' => TokenType::LBracket,
+            ']' => TokenType::RBracket,
+            '@' => TokenType::At,
+            ',' => TokenType::Comma,
+            ';' => TokenType::Semicolon,
+            '&' => TokenType::Ampersand,
+            '?' => TokenType::QuestionMark,
+            '\'' => return self.string(),
+            '=' if self.consume('>') => TokenType::FatArrow,
+            '=' => TokenType::Equal,
+            '-' => todo!(),
+            c if c.is_ascii_digit() => {
+                self.skip_while(char::is_ascii_digit);
+
+                // let lexeme = String::from(&self.source[self.start..self.index]);
+                TokenType::Number
             }
-        } else {
-            TokenType::Eof
+            c if c.is_ascii_alphanumeric() => {
+                self.skip_while(is_ident);
+                let lexeme = String::from(&self.source[self.start..self.index]);
+                if self.consume(':') {
+                    return self.keyword();
+                } else {
+                    self.ident(lexeme)
+                }
+            }
+            _else => TokenType::Error,
         };
 
         self.token(token_type)

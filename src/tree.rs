@@ -4,6 +4,7 @@ pub mod ast {
     #[derive(Clone, Debug)]
     pub enum Expression {
         Variable(String),
+        Field(String),
         Constant(Constant),
         SelfRef,
         LetIn(String, Box<Expression>, Box<Expression>),
@@ -138,6 +139,15 @@ pub mod typed {
         pub r#type: crate::sema::TypeId,
     }
 
+    impl<A: Clone> Typed<A> {
+        pub fn new(value: A, r#type: crate::sema::TypeId) -> Self {
+            Self {
+                value: Box::new(value),
+                r#type,
+            }
+        }
+    }
+
     #[derive(Clone, Debug)]
     pub struct ClassDefinition {
         pub class_type: crate::sema::ClassType,
@@ -194,6 +204,7 @@ pub mod ir {
         Let(Local, Expression, Expression),
 
         If(Expression, Expression, Expression),
+        IfNotNull(Expression, Expression, Expression),
         Seq(Expression, Expression),
 
         FieldGet(Expression, FieldId, usize),
@@ -203,8 +214,7 @@ pub mod ir {
         ClassCall(ClassId, MethodId, Vec<Expression>),
 
         Instantiate(ClassId, Vec<Expression>),
-
-        NotNull(Expression),
+        // NotNull(Expression),
     }
 
     pub type Expression = Rc<Expr>;

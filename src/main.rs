@@ -1,7 +1,6 @@
 use std::io::Read;
 
 mod builtins;
-mod interp;
 mod interp_ir;
 mod lexer;
 mod lowering;
@@ -28,8 +27,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let lexer = lexer::Lexer::new(&source_buf);
+
     let mut parser = parser::Parser::new(lexer);
-    let program = parser.parse_program().expect("parse program");
+    let program = match parser.parse_program() {
+        Ok(value) => value,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(0);
+        }
+    };
 
     println!("===");
     println!("{program:?}");
@@ -37,7 +43,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let (program, ctx) = match sema::analyze_program(program) {
         Ok(value) => value,
-        Err(e) => panic!("{e:?}"),
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(0);
+        }
     };
 
     let (program, tc) = lowering::lower_program(program, ctx.type_context);

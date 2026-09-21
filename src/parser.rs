@@ -45,6 +45,28 @@ pub enum ParseError {
     ExpectedKeyword,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct Diagnostic {
+    position: (usize, usize),
+}
+
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParseError::UnexpectedToken(token) => {
+                write!(f, "UnexpectedToken: {:?}", token.token_type)
+            }
+            ParseError::ExpectedButGot { expected, got } => {
+                write!(f, "Expected: {expected:?}, but got: {got:?}")
+            }
+            ParseError::ExpectedCall => write!(f, "Expected Call"),
+            ParseError::ExpectedTopLevel => write!(f, "Expected Top Level"),
+            ParseError::ExpectedIdent => write!(f, "Expected Ident"),
+            ParseError::ExpectedKeyword => write!(f, "Expected Keyword"),
+        }
+    }
+}
+
 type ParseResult<T> = std::result::Result<T, ParseError>;
 
 impl<'a> Parser<'a> {
@@ -53,14 +75,17 @@ impl<'a> Parser<'a> {
         Self { lexer, current }
     }
 
+    fn error<A>(&mut self, e: ParseError, diag: &mut Diagnostic) -> ParseResult<A> {
+        diag.position = (self.current.start, self.current.end);
+        Err(e)
+    }
+
     fn expect(&mut self, expected: crate::lexer::TokenType) -> ParseResult<Token> {
         if self.peek() == expected {
             Ok(self.eat())
         } else {
-            Err(ParseError::ExpectedButGot {
-                expected,
-                got: self.current,
-            })
+            let got = self.current;
+            Err(ParseError::ExpectedButGot { expected, got })
         }
     }
 
@@ -96,7 +121,6 @@ impl<'a> Parser<'a> {
         match token.token_type {
             TokenType::Ident => {
                 let lexeme = self.lexer.lexeme(token);
-                // println!("lexeme = {lexeme:?}");
                 Ok(String::from(lexeme))
             }
             _ => Err(ParseError::ExpectedIdent),
@@ -105,17 +129,19 @@ impl<'a> Parser<'a> {
 
     fn parse_keyword(&mut self) -> ParseResult<String> {
         let token = self.eat();
-        match token.token_type {
-            TokenType::Keyword => {
-                let lexeme = self.lexer.lexeme(token);
-                Ok(String::from(lexeme))
-            }
-            _ => Err(ParseError::ExpectedKeyword),
+        if let TokenType::Keyword = token.token_type {
+            let lexeme = self.lexer.lexeme(token);
+            Ok(String::from(lexeme))
+        } else {
+            Err(ParseError::ExpectedKeyword)
         }
     }
 
     fn parse_primary(&mut self) -> ParseResult<ast::Expression> {
         match self.peek() {
+            TokenType::At => self
+                .expect(TokenType::At)
+                .and_then(|_| self.parse_ident().map(ast::Expression::Field)),
             TokenType::Ident => self.parse_ident().map(ast::Expression::Variable),
             TokenType::Number => Ok(ast::Expression::Constant(ast::Constant::Integer({
                 let token = self.eat();
@@ -256,6 +282,7 @@ impl<'a> Parser<'a> {
             TokenType::Null => Precedence::End,
             TokenType::SelfRef => Precedence::End,
             //
+            TokenType::At => Precedence::End,
             TokenType::Ident => Precedence::UnaryCall,
             TokenType::Keyword => Precedence::KeywordCall,
             TokenType::LParens => Precedence::UnaryCall,

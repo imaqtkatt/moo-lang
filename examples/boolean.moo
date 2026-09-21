@@ -6,23 +6,23 @@ let class Boolean bool: bool => Boolean
 def class Boolean bool: b => new Boolean inner: b
 
 let Boolean unwrap => bool
-def Boolean unwrap => inner
+def Boolean unwrap => @inner
 
 let Boolean negate => Boolean
 def Boolean negate =>
-  if inner
+  if @inner
     then Boolean bool: false
     else Boolean bool: true
 
 let Boolean and: Boolean => Boolean
 def Boolean and: next =>
-  if inner
+  if @inner
     then next
     else self
 
 let Boolean or: Boolean => Boolean
 def Boolean or: next =>
-  if inner
+  if @inner
     then self
     else next
 

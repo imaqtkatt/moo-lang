@@ -1,4 +1,4 @@
-use crate::{sema, shared::Selector, tree::ir};
+use crate::{shared::Selector, tree::ir};
 
 #[derive(Clone, Debug)]
 pub enum Value {
@@ -7,6 +7,39 @@ pub enum Value {
     Bool(bool),
     Str(String),
     Instance(Instance),
+}
+
+impl Value {
+    pub fn format(&self, env: &Env, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::Null => write!(f, "null"),
+            Value::Int(i) => write!(f, "{i}"),
+            Value::Bool(b) => write!(f, "{b}"),
+            Value::Str(s) => write!(f, "{s}"),
+            Value::Instance(instance) => {
+                let class = &env.classes[instance.class.0];
+                write!(f, "{}", class.name)?;
+
+                let fields = instance.fields.borrow();
+                if fields.is_empty() {
+                    return Ok(());
+                }
+
+                write!(f, "[")?;
+                for (idx, value) in fields.iter().enumerate() {
+                    if idx == 0 {
+                        value.format(env, f)?;
+                    } else {
+                        write!(f, ", ")?;
+                        value.format(env, f)?;
+                    }
+                }
+                write!(f, "]")?;
+
+                Ok(())
+            }
+        }
+    }
 }
 
 // #[derive(Debug)]
@@ -39,6 +72,7 @@ impl std::fmt::Debug for Instance {
     }
 }
 
+#[allow(unused)]
 pub struct Env {
     frames: Vec<Frame>,
 
@@ -48,6 +82,7 @@ pub struct Env {
     fields: Vec<ir::Field>,
 }
 
+#[allow(unused)]
 struct Frame {
     curr_class: ir::ClassId,
     curr_method: ir::MethodId,
@@ -62,9 +97,9 @@ impl Env {
         self.frames[curr_frame].self_ref.clone()
     }
 
-    fn get_local(&self, ir::Local(idx): &ir::Local) -> Value {
+    fn get_local(&self, ir::Local(idx): ir::Local) -> Value {
         let curr_frame = self.frames.len() - 1;
-        self.frames[curr_frame].locals[*idx].clone()
+        self.frames[curr_frame].locals[idx].clone()
     }
 
     fn put_local(&mut self, ir::Local(idx): &ir::Local, value: Value) {
@@ -92,21 +127,23 @@ fn eval_ir_constant(constant: &ir::Constant) -> Value {
 
 fn eval_ir_expr(env: &mut Env, e: &ir::Expr) -> Value {
     match e {
-        ir::Expr::Variable(local) => env.get_local(local),
+        ir::Expr::Variable(local) => env.get_local(*local),
         ir::Expr::Constant(constant) => eval_ir_constant(constant),
         ir::Expr::SelfRef => env.self_ref(),
         ir::Expr::Let(local, value, next) => {
             let evaled_value = eval_ir_expr(env, value);
-
             env.put_local(local, evaled_value);
-
             eval_ir_expr(env, next)
         }
-        ir::Expr::If(condition, consequence, alternative) => match eval_ir_expr(env, condition) {
-            Value::Bool(true) => eval_ir_expr(env, consequence),
-            Value::Bool(false) => eval_ir_expr(env, alternative),
-            _ => unreachable!(),
-        },
+        ir::Expr::If(condition, consequence, alternative) => {
+            let evaled_condition = eval_ir_expr(env, condition);
+            let branch = match evaled_condition {
+                Value::Bool(true) => consequence,
+                Value::Bool(false) => alternative,
+                _ => unreachable!(),
+            };
+            eval_ir_expr(env, branch)
+        }
         ir::Expr::Seq(a, b) => {
             eval_ir_expr(env, a);
             eval_ir_expr(env, b)
@@ -142,21 +179,20 @@ fn eval_ir_expr(env: &mut Env, e: &ir::Expr) -> Value {
             method_call(env, method, Value::Null, arguments)
         }
         ir::Expr::Instantiate(class_id, init) => {
-            let class = env.lookup_class(class_id);
-            let class_id = class.id;
-
+            let &ir::Class { id, .. } = env.lookup_class(class_id);
             let init = eval_ir_many(env, init);
-
-            Value::Instance(Instance::instantiate(class_id, init))
+            Value::Instance(Instance::instantiate(id, init))
         }
-        ir::Expr::NotNull(nullable) => {
+        ir::Expr::IfNotNull(nullable, consequence, alternative) => {
             let evaled_nullable = eval_ir_expr(env, nullable);
 
-            if let Value::Null = evaled_nullable {
-                Value::Bool(false)
+            let branch = if let Value::Null = evaled_nullable {
+                alternative
             } else {
-                Value::Bool(true)
-            }
+                consequence
+            };
+
+            eval_ir_expr(env, branch)
         }
     }
 }
@@ -165,7 +201,7 @@ fn eval_ir_many(env: &mut Env, exs: &[ir::Expression]) -> Vec<Value> {
     exs.iter().map(|e| eval_ir_expr(env, e)).collect()
 }
 
-fn method_call(env: &mut Env, method: ir::Method, new_this: Value, arguments: Vec<Value>) -> Value {
+fn method_call(env: &mut Env, method: ir::Method, new_self: Value, arguments: Vec<Value>) -> Value {
     let mut new_locals = vec![Value::Null; method.locals];
 
     for (slot, argument) in arguments.into_iter().enumerate() {
@@ -175,7 +211,7 @@ fn method_call(env: &mut Env, method: ir::Method, new_this: Value, arguments: Ve
     env.frames.push(Frame {
         curr_class: method.receiver,
         curr_method: method.id,
-        self_ref: new_this,
+        self_ref: new_self,
         locals: new_locals,
     });
 

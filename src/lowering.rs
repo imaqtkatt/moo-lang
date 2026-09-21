@@ -264,8 +264,6 @@ fn lower_if_let_then_else(
 ) -> ir::Expr {
     let lowered_nullable = lower_typed_expr(nullable, ctx);
 
-    let check_not_null = ir::Expression::new(ir::Expr::NotNull(lowered_nullable.clone()));
-
     let nullable_local = ctx.add_local("tmp:nullable");
     let nullable_ref = ir::Expression::new(ir::Expr::Variable(nullable_local));
 
@@ -282,13 +280,22 @@ fn lower_if_let_then_else(
 
         let lowered_alternative = lower_typed_expr(alternative, ctx);
 
-        ir::Expr::If(check_not_null, lowered_consequence, lowered_alternative)
+        ir::Expr::IfNotNull(
+            nullable_ref.clone(),
+            lowered_consequence,
+            lowered_alternative,
+        )
     } else {
         let lowered_consequence = lower_typed_expr(consequence, ctx);
         let lowered_alternative = lower_typed_expr(alternative, ctx);
-        ir::Expr::If(check_not_null, lowered_consequence, lowered_alternative)
+        ir::Expr::IfNotNull(
+            nullable_ref.clone(),
+            lowered_consequence,
+            lowered_alternative,
+        )
     };
 
+    // if_then_else
     ir::Expr::Let(
         nullable_local,
         lowered_nullable,

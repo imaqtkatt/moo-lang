@@ -4,7 +4,7 @@ class LuckyNumber n: ?int
 
 let LuckyNumber get-or: int => int
 def LuckyNumber get-or: x =>
-  if let n
+  if let @n as n
     then n
     else x
 

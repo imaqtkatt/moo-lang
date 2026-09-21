@@ -1,10 +1,10 @@
 class Box inner: int
 
 let Box set-inner: int
-def Box set-inner: new-inner => inner = new-inner
+def Box set-inner: new-inner => @inner = new-inner
 
 let Box inner => int
-def Box inner => inner
+def Box inner => @inner
 
 
 
